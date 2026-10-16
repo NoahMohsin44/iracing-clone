@@ -18,6 +18,7 @@ public:
         tab_ = 0;
     }
     bool isOpen() const { return open_; }
+    void selectTab(int t) { forceTab_ = t; }
     SettingsResult draw(Settings& s, Input& input, const std::vector<std::pair<int, int>>& resolutions);
 
 private:
@@ -25,6 +26,7 @@ private:
     bool open_ = false;
     int tab_ = 0;
     Settings backup_;
+    int forceTab_ = -1;
     int captureAction_ = -1;
     bool captureSecondary_ = false;
 };

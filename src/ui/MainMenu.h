@@ -22,6 +22,8 @@ public:
     MenuAction draw(Settings& settings, const std::vector<JoystickInfo>& joysticks, int& liveryIndex,
                     const std::vector<std::string>& attribution, float trackLengthM);
 
+    void setPage(int p) { page_ = p; }
+
 private:
     int page_ = 0;  // 0 home, 1 drive setup, 2 credits
 };

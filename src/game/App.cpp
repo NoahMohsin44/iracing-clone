@@ -322,6 +322,17 @@ int App::autotest(const std::string& dir) {
     for (int i = 0; i < 90; ++i) demo_.update(1.0 / 30.0, controls_);
     for (int i = 0; i < 3; ++i) frame(1.0 / 30.0);
     screenshot(dir + "/00_menu.png");
+    menu_.setPage(1);
+    for (int i = 0; i < 2; ++i) frame(1.0 / 30.0);
+    screenshot(dir + "/00b_drive_setup.png");
+    menu_.setPage(0);
+    settingsMenu_.open(settings_);
+    for (int tab : {0, 2}) {
+        settingsMenu_.selectTab(tab);
+        for (int i = 0; i < 2; ++i) frame(1.0 / 30.0);
+        screenshot(dir + (tab == 0 ? "/00c_settings_graphics.png" : "/00d_settings_controls.png"));
+    }
+    settingsMenu_ = SettingsMenu{};
     state_ = State::Driving;
     for (const Shot& shot : shots) {
         Session& sess = player_;
@@ -356,6 +367,13 @@ int App::autotest(const std::string& dir) {
         LOGI("autotest %s: %.1f ms/frame, gpu %.1f ms", shot.name,
              std::chrono::duration<double, std::milli>(t1 - t0).count() / frames, renderer_.stats().gpuMs);
     }
+    // pause menu over the last shot
+    pauseMenu_ = true;
+    player_.paused = true;
+    player_.useOverrideCamera = false;
+    player_.camera = CameraMode::Chase;
+    for (int i = 0; i < 2; ++i) frame(1.0 / 30.0);
+    screenshot(dir + "/12_pause.png");
     return 0;
 }
 

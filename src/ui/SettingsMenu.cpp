@@ -43,7 +43,7 @@ SettingsResult SettingsMenu::draw(Settings& s, Input& input, const std::vector<s
 
     if (ImGui::BeginTabBar("tabs")) {
         auto& g = s.graphics;
-        if (ImGui::BeginTabItem("Graphics")) {
+        if (ImGui::BeginTabItem("Graphics", nullptr, forceTab_ == 0 ? ImGuiTabItemFlags_SetSelected : 0)) {
             ImGui::BeginChild("gfx", ImVec2(0, -70 * sc));
             ui::sectionHeader("DISPLAY");
             const char* modes[] = {"Windowed", "Borderless fullscreen", "Exclusive fullscreen"};
@@ -94,7 +94,7 @@ SettingsResult SettingsMenu::draw(Settings& s, Input& input, const std::vector<s
             ImGui::EndChild();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Audio")) {
+        if (ImGui::BeginTabItem("Audio", nullptr, forceTab_ == 1 ? ImGuiTabItemFlags_SetSelected : 0)) {
             ImGui::BeginChild("aud", ImVec2(0, -70 * sc));
             auto& a = s.audio;
             ui::sectionHeader("VOLUME");
@@ -111,13 +111,13 @@ SettingsResult SettingsMenu::draw(Settings& s, Input& input, const std::vector<s
             ImGui::EndChild();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Controls")) {
+        if (ImGui::BeginTabItem("Controls", nullptr, forceTab_ == 2 ? ImGuiTabItemFlags_SetSelected : 0)) {
             ImGui::BeginChild("ctl", ImVec2(0, -70 * sc));
             controlsTab(s, input);
             ImGui::EndChild();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Gameplay")) {
+        if (ImGui::BeginTabItem("Gameplay", nullptr, forceTab_ == 3 ? ImGuiTabItemFlags_SetSelected : 0)) {
             ImGui::BeginChild("gp", ImVec2(0, -70 * sc));
             auto& p = s.gameplay;
             ui::sectionHeader("UNITS & HUD");
@@ -140,6 +140,7 @@ SettingsResult SettingsMenu::draw(Settings& s, Input& input, const std::vector<s
         }
         ImGui::EndTabBar();
     }
+    forceTab_ = -1;
 
     // footer
     ImGui::SetCursorPosY(ImGui::GetWindowHeight() - 60 * sc);
