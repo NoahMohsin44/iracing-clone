@@ -132,6 +132,8 @@ void visitSettings(V& v, Settings& s) {
     v("controls", "pedal_deadzone", c.pedalDeadzone);
     v("controls", "keyboard_steer_speed", c.keyboardSteerSpeed);
     v("controls", "keyboard_speed_sensitive", c.keyboardSpeedSensitive);
+    v("controls", "pad_steer_filter", c.padSteerFilter);
+    v("controls", "pad_steer_gamma", c.padSteerGamma);
     v("controls", "use_gamepad_defaults", c.useGamepadDefaults);
     v("controls", "ffb_enabled", c.ffbEnabled);
     v("controls", "ffb_max_force", c.ffbMaxForce);

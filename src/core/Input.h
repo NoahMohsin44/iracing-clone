@@ -21,6 +21,15 @@ struct DriverControls {
     bool analogSteer = false;  // came from a wheel/stick
 };
 
+// What the controller/keyboard steering assist needs to know about the car.
+struct SteeringGeometry {
+    float speed = 0.0f;          // m/s
+    float lockDeg = 540.0f;      // steering wheel lock-to-lock
+    float maxRoadWheel = 0.384f; // road-wheel angle at full lock (rad)
+    float wheelbase = 2.7f;
+    float peakSlipAngle = 0.115f;  // front tyre peak slip angle (rad)
+};
+
 struct JoystickInfo {
     int jid = -1;
     std::string name;
@@ -32,8 +41,9 @@ struct JoystickInfo {
 class Input {
 public:
     void init(GLFWwindow* window, Settings* settings);
-    // Poll devices; carSteerLockDeg is the car's steering wheel lock-to-lock range.
-    DriverControls update(float dt, float carSpeed, float carSteerLockDeg);
+    // Poll devices. Wheels steer 1:1 with the car's steering wheel; gamepads and keys go through the
+    // steering assist (speed-sensitive lock up to the front tyres' peak, rate limit, gamma).
+    DriverControls update(float dt, const SteeringGeometry& geo);
     std::vector<JoystickInfo> joysticks() const;
 
     // Binding capture (settings menu): call begin, then poll until it returns true.
@@ -55,12 +65,15 @@ private:
     bool buttonDown(const Binding& b) const;
     bool actionDown(Action a) const;
     float analog(Action a, bool& has, bool bipolar) const;
-    static float speedSteerScale(float speed);
+    // Largest useful steer fraction at this speed: the angle that puts the front tyres at their peak
+    // slip angle while cornering at the grip limit (more only scrubs speed, then snaps back).
+    static float steerLimit(const SteeringGeometry& g);
 
     GLFWwindow* window_ = nullptr;
     Settings* settings_ = nullptr;
     bool prev_[kActionCount] = {};
     float kbSteer_ = 0.0f, kbThrottle_ = 0.0f, kbBrake_ = 0.0f, kbClutch_ = 0.0f;
+    float padSteer_ = 0.0f;
 
     bool capturing_ = false;
     bool captureAnalog_ = false;

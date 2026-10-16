@@ -178,7 +178,7 @@ float Input::analog(Action a, bool& has, bool bipolar) const {
     return 0.0f;
 }
 
-DriverControls Input::update(float dt, float carSpeed, float carSteerLockDeg) {
+DriverControls Input::update(float dt, const SteeringGeometry& geo) {
     DriverControls out;
     const auto& c = settings_->controls;
 
@@ -187,29 +187,38 @@ DriverControls Input::update(float dt, float carSpeed, float carSteerLockDeg) {
     float steerAxis = analog(Action::Steer, hasAxis, true);
     const Binding& sb = c.secondary[static_cast<int>(Action::Steer)];
     const bool isWheel = hasAxis && sb.valid();
+    const float limit = c.keyboardSpeedSensitive ? steerLimit(geo) : 1.0f;
+    // assisted steering moves at most as fast as a driver's hands would turn a wheel: quick at
+    // parking speeds, a few degrees per tenth of a second at 250 km/h; faster back to centre so a
+    // slide can still be caught
+    const float roadRate = std::clamp(1.3f - geo.speed * 0.012f, 0.42f, 1.3f);  // rad/s at the road wheels
+    auto rateLimited = [&](float current, float target) {
+        float rate = roadRate / std::max(0.05f, geo.maxRoadWheel) * c.keyboardSteerSpeed / 2.2f;
+        if (std::abs(target) < std::abs(current) || target * current < 0.0f) rate *= 1.8f;
+        return current + std::clamp(target - current, -rate * dt, rate * dt);
+    };
     float kbTarget = (actionDown(Action::SteerRight) ? 1.0f : 0.0f) - (actionDown(Action::SteerLeft) ? 1.0f : 0.0f);
-    const float speedLimit = c.keyboardSpeedSensitive ? speedSteerScale(carSpeed) : 1.0f;
     if (std::abs(kbTarget) > 0.0f || !hasAxis) {
-        float target = kbTarget * speedLimit;
-        float rate = c.keyboardSteerSpeed * (std::abs(target) < std::abs(kbSteer_) || target * kbSteer_ < 0 ? 2.2f : 1.0f);
-        rate *= 1.0f / (1.0f + carSpeed / 45.0f);
-        float d = target - kbSteer_;
-        kbSteer_ += std::clamp(d, -rate * dt, rate * dt);
+        kbSteer_ = rateLimited(kbSteer_, kbTarget * limit);
     }
     if (hasAxis && std::abs(kbTarget) == 0.0f) {
         float v = applyDeadzone(steerAxis, c.steerDeadzone);
-        v = std::copysign(std::pow(std::abs(v), c.steerLinearity), v);
         if (isWheel) {
             // 1:1 steering: physical wheel degrees -> car steering wheel degrees
+            v = std::copysign(std::pow(std::abs(v), c.steerLinearity), v);
             float deg = v * c.wheelRotation * 0.5f;
-            out.steer = std::clamp(deg / (carSteerLockDeg * 0.5f), -1.0f, 1.0f);
+            out.steer = std::clamp(deg / (geo.lockDeg * 0.5f), -1.0f, 1.0f);
         } else {
-            out.steer = v * (c.keyboardSpeedSensitive ? 0.4f + 0.6f * speedLimit : 1.0f);
+            // gamepad stick: gamma for fine control around centre, speed-sensitive lock, filter
+            v = std::copysign(std::pow(std::abs(v), std::max(1.0f, c.padSteerGamma)), v);
+            padSteer_ = c.padSteerFilter ? rateLimited(padSteer_, v * limit) : v * limit;
+            out.steer = padSteer_;
         }
         out.analogSteer = true;
         kbSteer_ = out.steer;
     } else {
         out.steer = kbSteer_;
+        padSteer_ = kbSteer_;
     }
 
     // ---------------------------------------------------------------- pedals
@@ -251,10 +260,12 @@ DriverControls Input::update(float dt, float carSpeed, float carSteerLockDeg) {
     return out;
 }
 
-float Input::speedSteerScale(float speed) {
-    // keyboard/gamepad steering authority reduces with speed (no force feedback to feel the limit)
-    float t = std::clamp(speed / 65.0f, 0.0f, 1.0f);
-    return 1.0f - 0.72f * t;
+float Input::steerLimit(const SteeringGeometry& g) {
+    // Ackermann angle for the tightest corner the car can take at this speed (~1.7 g), plus the
+    // front slip angle at peak grip
+    const float v2 = std::max(g.speed * g.speed, 1.0f);
+    const float road = std::atan(g.wheelbase * 16.5f / v2) + g.peakSlipAngle * 1.1f;
+    return std::clamp(road / std::max(0.05f, g.maxRoadWheel), 0.12f, 1.0f);
 }
 
 void Input::beginCapture(bool analog) {

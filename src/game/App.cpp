@@ -223,8 +223,13 @@ void App::frame(double dt) {
     beginUiFrame();
     const Car& activeCar = state_ == State::Driving ? player_.car() : demo_.car();
     if (!settingsMenu_.isOpen() || !input_.capturing()) {
-        controls_ = input_.update(static_cast<float>(dt), static_cast<float>(activeCar.speed()),
-                                  activeCar.params().steeringWheelLock);
+        SteeringGeometry geo;
+        geo.speed = static_cast<float>(activeCar.speed());
+        geo.lockDeg = activeCar.params().steeringWheelLock;
+        geo.maxRoadWheel = activeCar.params().front.maxSteer;
+        geo.wheelbase = activeCar.params().wheelbase;
+        geo.peakSlipAngle = activeCar.params().front.tire.peakSlipAngle;
+        controls_ = input_.update(static_cast<float>(dt), geo);
     }
     if (glfwGetKey(window_, GLFW_KEY_F12) == GLFW_PRESS) {
         static double last = 0;

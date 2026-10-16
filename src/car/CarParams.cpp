@@ -40,6 +40,9 @@ CarParams CarParams::gt3() {
     p.rear.tire.width = 0.31f;
     p.rear.tire.inertia = 1.40f;
     p.rear.tire.mu = 1.77f;
+    // GT3 rears are the bigger tyre (31/71-18 vs 30/68-18): a larger, stiffer contact patch builds
+    // cornering force at a smaller slip angle, which gives the car its mild, stable understeer.
+    p.rear.tire.peakSlipAngle = 0.100f;
     return p;
 }
 

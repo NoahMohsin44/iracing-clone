@@ -41,7 +41,13 @@ real GPU, use 4–8× MSAA, Ultra shadows and vegetation, and higher resolutions
   constraints. Sequential 6-speed with ignition cut, auto-blip and money-shift protection.
   Clutch-pack LSD (preload + power/coast ramps).
 - Aero: CdA 1.25, ClA 3.0 with balance; ~600 kg of downforce at 200 km/h.
-- ABS, 6-level traction control and adjustable brake bias. Brake-disc temperature makes the discs glow.
+- ABS, 6-level traction control and adjustable brake bias, modelled on motorsport systems:
+  - ABS controls the fronts per wheel and the rear axle "select-low", so an unloaded inside rear can't
+    take away the rear's grip when you brake into a corner.
+  - Both ABS and TC lower their slip targets as lateral g builds.
+  - Brake-disc temperature makes the discs glow.
+- The bigger GT3 rear tyres (31/71-18 vs 30/68-18) are stiffer, giving the mild, stable understeer of a
+  real GT3.
 - Steering torque is computed physically about each front kingpin, then passed through the 12.3:1 rack
   and the power steering to the column. This is what force feedback plays:
   - the tyres' aligning moment (pneumatic trail), which fades as the fronts pass their peak slip
@@ -51,9 +57,17 @@ real GPU, use 4–8× MSAA, Ultra shadows and vegetation, and higher resolutions
   - kingpin-inclination centring
   - contact-patch twist, which makes the wheel heavy when parked and frees up once rolling
   - the wheel goes light when the front wheels leave the ground (Flugplatz!)
-- Validated by `apexsim_tests`: 0–100 km/h in 3.6 s, 0–200 in 9.2 s, 271 km/h top speed, 200–0 in
-  ~80 m, ~1.7 g mid-speed grip, and a clean AI lap of the Nordschleife in ~7:44 (real GT3: ~7:00).
-  Steering: ~17-28 Nm at the rim at the limit, ~13 Nm when parked.
+- Validated by `apexsim_tests`:
+  - 0–100 km/h in 3.6 s, 0–200 in 9.2 s, 271 km/h top speed, 200–0 in ~80 m
+  - ~1.7 g mid-speed grip
+  - a clean AI lap of the Nordschleife in ~7:43 (real GT3: ~7:00)
+  - steering: ~17–28 Nm at the rim at the limit, ~13 Nm when parked
+- ISO-style handling tests (`apexsim_tests handling`) with the steering held through each event:
+  - steady-state circle: understeer gradient positive, and the front lets go first at the limit
+  - lifting mid-corner: tucks in without spinning
+  - braking in a corner: rotates the car without spinning it
+  - full throttle out of a slow corner: a catchable slide at most, with TC on
+  - step steer at 150 km/h: ~7 % yaw overshoot, ~120 ms response
 
 **Graphics** (forward HDR renderer)
 - PBR (GGX / Smith / Schlick), with a clear-coat lobe for car paint and carbon.
@@ -128,7 +142,7 @@ file (`1` = cockpit mix, `0` = exterior).
 
 | Action | Keyboard | Gamepad |
 |---|---|---|
-| Steer | ← → | left stick |
+| Steer | ← → | left stick (filtered, see below) |
 | Throttle / brake | ↑ / ↓ | RT / LT |
 | Shift up / down | E / Q | A or RB / X or LB |
 | Clutch | Z | – |
@@ -140,6 +154,15 @@ file (`1` = cockpit mix, `0` = exterior).
 | Brake bias + / − | ] / [ | d-pad up / down |
 | HUD | H | – |
 | Screenshot | F12 | – |
+
+**Gamepad / keyboard steering:** a stick isn't a steering wheel, so by default the steering is
+assisted like in other sims:
+- full stick at speed gives the angle where the front tyres reach peak grip, not more
+- the steering moves at the speed of a driver's hands, and quicker back towards centre so you can still
+  catch a slide
+- a gamma curve gives finer control around the centre of the stick
+
+You can change all three in *Settings → Controls*. Wheels are always 1:1 and unassisted.
 
 **Racing wheels** (Logitech, Thrustmaster, Fanatec, …):
 1. Open *Settings → Controls*.

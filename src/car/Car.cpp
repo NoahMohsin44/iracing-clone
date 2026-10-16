@@ -309,25 +309,48 @@ void Car::step(double dt, const CarInput& in) {
     }
 
     // ------------------------------------------------------------------ ABS / TC
+    // Both target a slip ratio that shrinks with lateral acceleration, like motorsport ABS/TC maps
+    // ("cornering" control): in a corner the tyres need part of their grip for cornering.
+    const double latLoad = std::clamp(std::abs(accelLocal_.x) / (1.5 * kG), 0.0, 1.0);
     absActive_ = false;
-    for (auto& w : wheels_) {
-        const double peak = (w.axle == 0 ? p_.front : p_.rear).tire.peakSlipRatio;
-        if (absEnabled && brake_ > 0.05 && speed > 2.5 && w.contact) {
-            if (w.slipX < -peak * 1.15) w.absFactor -= dt * 32.0;
-            else w.absFactor += dt * 11.0;
-            w.absFactor = std::clamp(w.absFactor, 0.12, 1.0);
-        } else {
-            w.absFactor = 1.0;
+    {
+        const double peakF = p_.front.tire.peakSlipRatio, peakR = p_.rear.tire.peakSlipRatio;
+        const bool on = absEnabled && brake_ > 0.05 && speed > 2.5;
+        auto modulate = [&](double& factor, double slip, double target) {
+            if (slip < -target) factor -= dt * 32.0;
+            else factor += dt * 11.0;
+            factor = std::clamp(factor, 0.12, 1.0);
+        };
+        // fronts individually, close to the peak (most of the braking)
+        for (int i = 0; i < 2; ++i) {
+            Wheel& w = wheels_[i];
+            if (on && w.contact) modulate(w.absFactor, w.slipX, peakF * (1.10 - 0.35 * latLoad));
+            else w.absFactor = 1.0;
         }
-        if (w.absFactor < 0.97) absActive_ = true;
+        // rear axle select-low: both rear brakes follow the wheel that slips most, with a lower
+        // target, so an unloaded inside rear can't take the rear end's lateral grip away
+        Wheel& rl = wheels_[2];
+        Wheel& rr = wheels_[3];
+        if (on && (rl.contact || rr.contact)) {
+            double factor = std::min(rl.absFactor, rr.absFactor);
+            modulate(factor, std::min(rl.slipX, rr.slipX), peakR * (0.85 - 0.35 * latLoad));
+            rl.absFactor = rr.absFactor = factor;
+        } else {
+            rl.absFactor = rr.absFactor = 1.0;
+        }
+        for (const auto& w : wheels_)
+            if (w.absFactor < 0.97) absActive_ = true;
     }
-    static const double kTcThreshold[] = {1e9, 0.30, 0.22, 0.17, 0.135, 0.11, 0.09};
+    // traction control: driven-wheel slip target per level (1 loosest .. 6 tightest)
+    static const double kTcSlip[] = {1e9, 0.20, 0.16, 0.13, 0.11, 0.09, 0.075};
     const int tcIdx = std::clamp(tcLevel, 0, 6);
+    const double tcTarget = kTcSlip[tcIdx] * (1.0 - 0.45 * latLoad);
     const double driveSlip = std::max(wheels_[2].slipX, wheels_[3].slipX);
-    if (tcIdx > 0 && throttle_ > 0.05 && speed > 1.0 && driveSlip > kTcThreshold[tcIdx]) {
-        tcFactor_ -= dt * (14.0 + 160.0 * (driveSlip - kTcThreshold[tcIdx]));
+    if (tcIdx > 0 && throttle_ > 0.05 && speed > 1.0 && driveSlip > tcTarget) {
+        tcFactor_ -= dt * (14.0 + 160.0 * (driveSlip - tcTarget));
     } else {
-        tcFactor_ += dt * 4.0;
+        // give torque back quickly while the tyres are well inside the target, gently near it
+        tcFactor_ += dt * (3.0 + 60.0 * std::clamp(tcTarget * 0.85 - driveSlip, 0.0, 0.1));
     }
     tcFactor_ = std::clamp(tcFactor_, 0.05, 1.0);
     tcActive_ = tcFactor_ < 0.97;

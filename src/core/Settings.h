@@ -78,8 +78,10 @@ struct ControlSettings {
     float steerDeadzone = 0.02f;
     float steerLinearity = 1.0f;      // 1 = linear, >1 less sensitive around centre
     float pedalDeadzone = 0.02f;
-    float keyboardSteerSpeed = 2.2f;  // full-lock per second at standstill
-    bool keyboardSpeedSensitive = true;
+    float keyboardSteerSpeed = 2.2f;  // steering assist speed (2.2 = a quick driver's hands)
+    bool keyboardSpeedSensitive = true;  // keyboard/gamepad: lock limited to what the tyres can use
+    bool padSteerFilter = true;       // gamepad: rate-limit the stick like hands on a wheel
+    float padSteerGamma = 1.5f;       // gamepad: >1 = finer control around centre
     bool useGamepadDefaults = true;   // use SDL gamepad mapping if no explicit controller bindings
 
     // Force feedback (steering wheels). Strength is the steering column torque, in Nm, that drives

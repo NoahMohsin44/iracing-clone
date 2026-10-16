@@ -358,6 +358,266 @@ void testForceFeedbackSignal() {
     check(s2.safetyTrips() == 1 && o.safetyCut && o.force == 0.0f, "runaway guard mutes a wheel that runs far past the lock");
 }
 
+// ============================================================================ handling (ISO-style)
+// Steady-state cornering (ISO 4138), power-off in a turn (ISO 9816), braking in a turn (ISO 7975),
+// power-on corner exit and a step steer (ISO 7401). Events are applied with the steering held,
+// so the numbers describe the car, not a driver catching it.
+namespace handling {
+
+struct State {
+    double beta = 0, yaw = 0, ay = 0, speed = 0, alphaF = 0, alphaR = 0, steerDeg = 0;
+};
+
+State probe(const Car& car) {
+    State st;
+    glm::dmat3 R = car.rotation();
+    glm::dvec3 vb = glm::transpose(R) * car.velocity();
+    st.beta = glm::degrees(std::atan2(vb.x, std::max(0.5, -vb.z)));  // + = velocity to the right of the nose
+    st.yaw = glm::degrees(car.angularVelocity().y);
+    st.ay = car.localAcceleration().x / 9.81;
+    st.speed = car.speed();
+    const auto& w = car.wheels();
+    st.alphaF = glm::degrees(std::atan(0.5 * (w[0].slipY + w[1].slipY)));
+    st.alphaR = glm::degrees(std::atan(0.5 * (w[2].slipY + w[3].slipY)));
+    st.steerDeg = glm::degrees(car.steeringAngle());
+    return st;
+}
+
+// Closed-loop driver: holds the circle and a target speed (auto gearbox).
+struct Driver {
+    double steerI = 0, speedI = 0;
+    CarInput drive(const Car& car, const TrackData& track, double radius, double vTarget) {
+        const auto& loc = car.trackLocation();
+        glm::dvec3 tangent(track.tangentAt(loc.s));
+        glm::dvec3 fwd = car.forward();
+        double headingErr = std::atan2(glm::dot(glm::cross(fwd, tangent), glm::dvec3(0, 1, 0)), glm::dot(fwd, tangent));
+        double ff = std::atan(car.params().wheelbase / radius);
+        steerI += -loc.lateral * 0.00003;
+        double beta = glm::radians(probe(car).beta);
+        double steer = (ff + beta * 0.6 - headingErr * 1.4 - loc.lateral * 0.06 + steerI) / car.params().front.maxSteer;
+        CarInput in;
+        in.steer = static_cast<float>(std::clamp(steer, -1.0, 1.0));
+        double err = vTarget - car.forwardSpeed();
+        speedI = std::clamp(speedI + err * kDt * 0.4, -0.3, 0.6);
+        in.throttle = static_cast<float>(std::clamp(0.25 + err * 0.6 + speedI, 0.0, 1.0));
+        in.brake = static_cast<float>(std::clamp(-err * 0.3 - 0.2, 0.0, 1.0));
+        return in;
+    }
+};
+
+struct Result {
+    double betaMax = 0, yawRatio = 1, betaAt1s = 0;
+    bool spun = false;
+};
+
+// Drive the circle to steady state at lateral acceleration `g`, then run `event` with the steering
+// frozen for `seconds`. event(in, t) edits the inputs.
+template <typename Ev>
+Result circleEvent(double radius, double g, int tc, Ev event, double seconds = 2.0, bool quietSteady = true) {
+    TrackData track;
+    track.createSynthetic(circle(static_cast<float>(radius), 1.0f), 25.0f, 1.0f, 80.0f);
+    Car car;
+    car.init(CarParams::gt3(), &track);
+    car.setAutoShift(true);
+    car.tcLevel = tc;
+    car.resetTo(0.0f, 0.0f);
+    Driver d;
+    const double v = std::sqrt(g * 9.81 * radius);
+    CarInput in;
+    for (int i = 0; i < 9000; ++i) {
+        double ramp = std::min(1.0, i / 5000.0);
+        in = d.drive(car, track, radius, v * (0.6 + 0.4 * ramp));
+        car.step(kDt, in);
+    }
+    State s0 = probe(car);
+    Result r;
+    const float frozenSteer = in.steer;
+    for (int i = 0; i < static_cast<int>(seconds / kDt); ++i) {
+        double t = i * kDt;
+        CarInput e = in;
+        e.steer = frozenSteer;
+        event(e, t);
+        car.step(kDt, e);
+        State st = probe(car);
+        double dBeta = st.beta - s0.beta;
+        r.betaMax = std::max(r.betaMax, std::abs(dBeta) * (dBeta * s0.yaw > 0 ? -1.0 : 1.0) > 0 ? std::abs(dBeta) : r.betaMax);
+        if (std::abs(st.beta) > 25.0) r.spun = true;
+        if (std::abs(t - 1.0) < kDt * 0.5) {
+            r.betaAt1s = st.beta - s0.beta;
+            r.yawRatio = st.yaw / s0.yaw;
+        }
+    }
+    (void)quietSteady;
+    printf("    steady: %.2f g at %.0f km/h, steer %.1f deg, beta %.1f, alphaF %.1f, alphaR %.1f\n", s0.ay, s0.speed * 3.6,
+           s0.steerDeg, s0.beta, s0.alphaF, s0.alphaR);
+    return r;
+}
+
+void steadyState() {
+    printf("\n== Handling: steady-state circle R=100 m (ISO 4138)\n");
+    TrackData track;
+    track.createSynthetic(circle(100.0f, 1.0f), 25.0f, 1.0f, 80.0f);
+    Car car;
+    car.init(CarParams::gt3(), &track);
+    car.setAutoShift(true);
+    car.resetTo(0.0f, 0.0f);
+    Driver d;
+    double v = 12.0;
+    double nextG = 0.2;
+    double delta0 = glm::degrees(std::atan(car.params().wheelbase / 100.0));
+    std::vector<std::pair<double, double>> pts;
+    State last;
+    for (int i = 0; i < 400000; ++i) {
+        CarInput in = d.drive(car, track, 100.0, v);
+        car.step(kDt, in);
+        if (i > 6000) v += kDt * 0.12;
+        if (i % 500 == 0 && i > 8000) {
+            State st = probe(car);
+            last = st;
+            if (std::abs(car.trackLocation().lateral) > 3.0 || std::abs(st.beta) > 12.0) break;
+            if (std::abs(st.ay) >= nextG) {
+                pts.push_back({std::abs(st.ay), std::abs(st.steerDeg)});
+                printf("    %.2f g  %3.0f km/h  steer %5.2f deg (Ackermann %.2f)  beta %5.1f  alpha F %4.1f R %4.1f\n",
+                       std::abs(st.ay), st.speed * 3.6, std::abs(st.steerDeg), delta0, st.beta, st.alphaF, st.alphaR);
+                nextG += 0.2;
+            }
+        }
+    }
+    double ug = 0.0;
+    if (pts.size() >= 3) {
+        ug = (pts[2].second - pts[0].second) / (pts[2].first - pts[0].first);
+        printf("    understeer gradient (0.2-0.6 g): %.2f deg/g at the road wheel\n", ug);
+    }
+    const bool frontFirst = std::abs(last.alphaR) <= std::abs(last.alphaF);
+    printf("    limit: %.2f g, %s\n", std::abs(last.ay), frontFirst ? "front saturates first (understeer)" : "rear lets go first (oversteer)");
+    check(ug > 0.1, "mild understeer in normal cornering (positive understeer gradient)");
+    check(frontFirst, "at the limit the front tyres give up first (no snap oversteer)");
+}
+
+// Wheel-by-wheel trace of braking in a turn (diagnostics).
+void traceBrakeInTurn(double brake, bool abs, bool autoShift) {
+    TrackData track;
+    track.createSynthetic(circle(100.0f, 1.0f), 25.0f, 1.0f, 80.0f);
+    Car car;
+    car.init(CarParams::gt3(), &track);
+    car.setAutoShift(true);
+    car.absEnabled = abs;
+    car.resetTo(0.0f, 0.0f);
+    Driver d;
+    const double v = std::sqrt(1.0 * 9.81 * 100.0);
+    CarInput in;
+    for (int i = 0; i < 9000; ++i) {
+        in = d.drive(car, track, 100.0, v * (0.6 + 0.4 * std::min(1.0, i / 5000.0)));
+        car.step(kDt, in);
+    }
+    car.setAutoShift(autoShift);
+    printf("  -- brake %.0f%% ABS %s autoshift %s (gear %d)\n", brake * 100, abs ? "on" : "off", autoShift ? "on" : "off",
+           car.drivetrain().gear());
+    const float steer = in.steer;
+    for (int i = 0; i <= 1200; ++i) {
+        CarInput e = in;
+        e.steer = steer;
+        e.throttle = 0.0f;
+        e.brake = static_cast<float>(brake);
+        car.step(kDt, e);
+        if (i % 100 == 0) {
+            State st = probe(car);
+            const auto& w = car.wheels();
+            printf("   t=%.1f beta %+5.1f yaw %5.1f gear %d rpm %4.0f | slipX FL %+.2f FR %+.2f RL %+.2f RR %+.2f | "
+                   "load RL %4.0f RR %4.0f | Fy F %5.0f R %5.0f | absR %.2f %.2f\n",
+                   i * kDt, st.beta, st.yaw, car.drivetrain().gear(), car.drivetrain().rpm(), w[0].slipX, w[1].slipX,
+                   w[2].slipX, w[3].slipX, w[2].load, w[3].load, w[0].fy + w[1].fy, w[2].fy + w[3].fy, w[2].absFactor,
+                   w[3].absFactor);
+        }
+    }
+}
+
+void run() {
+    if (std::getenv("APEX_TRACE_BRAKE")) {
+        traceBrakeInTurn(0.3, true, true);
+        traceBrakeInTurn(0.3, true, false);
+        traceBrakeInTurn(0.3, false, false);
+        return;
+    }
+    steadyState();
+    printf("\n== Handling: power-off in a turn, R=100 m (ISO 9816), steering held\n");
+    for (double g : {1.0, 1.3}) {
+        Result r = circleEvent(100.0, g, 3, [](CarInput& e, double) { e.throttle = 0.0f; });
+        printf("  lift at %.1f g: sideslip change at 1 s %+.1f deg, yaw-rate ratio %.2f%s\n", g, r.betaAt1s, r.yawRatio,
+               r.spun ? "  -> SPIN" : "");
+        check(!r.spun && std::abs(r.betaAt1s) < 4.0, "lifting mid-corner tucks the nose in without a spin");
+    }
+    printf("\n== Handling: braking in a turn, R=100 m (ISO 7975), steering held\n");
+    for (double b : {0.3, 0.6}) {
+        Result r = circleEvent(100.0, 1.0, 3, [b](CarInput& e, double) { e.throttle = 0.0f; e.brake = static_cast<float>(b); });
+        printf("  brake %.0f%% at 1.0 g: sideslip change at 1 s %+.1f deg, yaw-rate ratio %.2f%s\n", b * 100, r.betaAt1s,
+               r.yawRatio, r.spun ? "  -> SPIN" : "");
+        check(!r.spun && std::abs(r.betaAt1s) < 5.0, "braking in a corner (ABS) rotates the car but does not spin it");
+    }
+    printf("\n== Handling: full throttle out of a 2nd-gear corner, R=40 m at 0.9 g, steering held\n");
+    for (int tc : {0, 1, 3, 6}) {
+        Result r = circleEvent(40.0, 0.9, tc, [](CarInput& e, double t) { e.throttle = static_cast<float>(std::min(1.0, t / 0.15)); });
+        printf("  TC %d: sideslip change at 1 s %+.1f deg, yaw-rate ratio %.2f%s\n", tc, r.betaAt1s, r.yawRatio,
+               r.spun ? "  -> SPIN" : "");
+        if (tc >= 1) check(!r.spun && std::abs(r.betaAt1s) < 6.0, "full throttle out of a slow corner with TC: controllable slide at most");
+    }
+    printf("\n== Handling: step steer at 150 km/h (ISO 7401)\n");
+    {
+        TrackData straight;
+        straight.createSynthetic(stadium(5000.0f, 300.0f, 2.0f), 30.0f, 2.0f, 60.0f);
+        Car car;
+        car.init(CarParams::gt3(), &straight);
+        car.setAutoShift(true);
+        car.resetTo(5.0f, 0.0f);
+        AIDriver ai;
+        ai.init(&straight);
+        int i = 0;
+        for (; i < 60000 && car.speed() < 150.0 / 3.6; ++i) {
+            CarInput in = ai.update(car, kDt);
+            in.throttle = 1.0f;
+            in.brake = 0.0f;
+            car.step(kDt, in);
+        }
+        CarInput hold = ai.update(car, kDt);
+        double base = hold.steer;
+        double peak = 0, final = 0, t90 = -1;
+        std::vector<double> yaw;
+        for (int k = 0; k < 3000; ++k) {
+            CarInput in = hold;
+            in.steer = static_cast<float>(base + std::min(1.0, k / 100.0) * 0.035);  // ~0.8 deg at the wheels
+            double err = 150.0 / 3.6 - car.forwardSpeed();
+            in.throttle = static_cast<float>(std::clamp(0.5 + err * 0.5, 0.0, 1.0));
+            car.step(kDt, in);
+            // 10 Hz low-pass: the yaw sensor of a vehicle-dynamics test, not the 1 kHz bump jitter
+            const double raw = std::abs(probe(car).yaw);
+            yaw.push_back(yaw.empty() ? raw : yaw.back() + (raw - yaw.back()) * (1.0 - std::exp(-2.0 * 3.14159 * 10.0 * kDt)));
+            if (std::getenv("APEX_TRACE_STEP") && k % 25 == 0) {
+                State st = probe(car);
+                glm::dvec3 wl = glm::transpose(car.rotation()) * car.angularVelocity();
+                const auto& w = car.wheels();
+                printf("    t=%.3f yaw %6.2f roll %+6.2f deg/s beta %+5.2f aF %+5.2f aR %+5.2f ay %.2f | Fz %4.0f %4.0f %4.0f %4.0f\n",
+                       k * kDt, st.yaw, glm::degrees(wl.z), st.beta, st.alphaF, st.alphaR, st.ay, w[0].load, w[1].load,
+                       w[2].load, w[3].load);
+            }
+        }
+        // steady: 0.6-1.4 s after the step (before the speed hold's next gear change disturbs it)
+        for (size_t k = 600; k < 1400; ++k) final += yaw[k] / 800.0;
+        if (std::getenv("APEX_TRACE_STEP"))
+            for (size_t k = 0; k < yaw.size(); k += 50) printf("    filt t=%.2f %.2f\n", k * kDt, yaw[k]);
+        for (size_t k = 0; k < 1400; ++k) {
+            peak = std::max(peak, yaw[k]);
+            if (t90 < 0 && yaw[k] > 0.9 * final) t90 = (k - 50) * kDt;
+        }
+        State st = probe(car);
+        const double overshoot = (peak / final - 1.0) * 100.0;
+        printf("  steady %.2f g, yaw rate %.1f deg/s, overshoot %.0f%%, response time (50%% steer to 90%% yaw) %.0f ms\n",
+               std::abs(st.ay), final, overshoot, t90 * 1000.0);
+        check(overshoot < 30.0, "step steer: yaw rate settles without a big overshoot (< 30%)");
+    }
+}
+
+}  // namespace handling
+
 void testLap() {
     printf("\n== AI lap of the Nordschleife\n");
     TrackData track;
@@ -523,6 +783,10 @@ int main(int argc, char** argv) {
         renderAudioPreview(argv[2], argc > 3 ? static_cast<float>(atof(argv[3])) : 0.0f);
         return 0;
     }
+    if (argc > 1 && strcmp(argv[1], "handling") == 0) {
+        handling::run();
+        return g_failures ? 1 : 0;
+    }
     bool quick = argc > 1 && strcmp(argv[1], "quick") == 0;
     TrackData straight;
     straight.createSynthetic(stadium(5000.0f, 300.0f, 2.0f), 8.0f, 2.0f, 40.0f);
@@ -533,6 +797,7 @@ int main(int argc, char** argv) {
     testForceFeedbackSignal();
     testSkidpad(80.0f, 60.0f);
     testSkidpad(300.0f, 130.0f);
+    handling::run();
     if (!quick) testLap();
     printf("\n%s (%d failures)\n", g_failures ? "SOME TESTS FAILED" : "ALL TESTS PASSED", g_failures);
     return g_failures ? 1 : 0;

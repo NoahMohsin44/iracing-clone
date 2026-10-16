@@ -195,8 +195,12 @@ void SettingsMenu::controlsTab(Settings& s, Input& input) {
     ImGui::SetNextItemWidth(360 * sc);
     ImGui::SliderFloat("Pedal deadzone", &c.pedalDeadzone, 0.0f, 0.2f, "%.2f");
     ImGui::SetNextItemWidth(360 * sc);
-    ImGui::SliderFloat("Keyboard steering speed", &c.keyboardSteerSpeed, 0.8f, 5.0f, "%.1f");
+    ImGui::SliderFloat("Keyboard / gamepad steering speed", &c.keyboardSteerSpeed, 0.8f, 5.0f, "%.1f");
     ImGui::Checkbox("Speed-sensitive keyboard / gamepad steering", &c.keyboardSpeedSensitive);
+    ImGui::Checkbox("Gamepad steering filter (smooth the stick like hands on a wheel)", &c.padSteerFilter);
+    ImGui::SetNextItemWidth(360 * sc);
+    ImGui::SliderFloat("Gamepad steering gamma", &c.padSteerGamma, 1.0f, 3.0f, "%.2f");
+    ImGui::TextDisabled("Speed-sensitive: full stick = the angle where the front tyres reach peak grip. Wheels are always 1:1.");
 
     ui::sectionHeader("FORCE FEEDBACK");
     FfbStatus st = ffb_ ? ffb_->status() : FfbStatus{};
