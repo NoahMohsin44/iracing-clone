@@ -1,12 +1,15 @@
 #include "gfx/PostFX.h"
 
 #include <algorithm>
+#include <cstdlib>
 
 namespace apex {
 
 bool PostFX::init() {
     return resolve_.load("fullscreen.vert", "resolve.frag") && down_.load("fullscreen.vert", "bloom_down.frag") &&
-           up_.load("fullscreen.vert", "bloom_up.frag") && composite_.load("fullscreen.vert", "composite.frag");
+           up_.load("fullscreen.vert", "bloom_up.frag") && composite_.load("fullscreen.vert", "composite.frag") &&
+           aoDepth_.load("fullscreen.vert", "ao_depth.frag") && ao_.load("fullscreen.vert", "ao.frag") &&
+           aoBlur_.load("fullscreen.vert", "ao_blur.frag");
 }
 
 void PostFX::resize(int w, int h) {
@@ -22,6 +25,48 @@ void PostFX::resize(int w, int h) {
         bloom_[i].create(bw, bh, {GL_R11F_G11F_B10F}, 0, 1);
         bloom_[i].color(0).setFilter(GL_LINEAR, GL_LINEAR);
     }
+    const int hw = std::max(1, w / 2), hh = std::max(1, h / 2);
+    aoDist_.create(hw, hh, {GL_R32F}, 0, 1);
+    aoDist_.color(0).setFilter(GL_NEAREST, GL_NEAREST);
+    aoDist_.color(0).setWrap(GL_CLAMP_TO_EDGE);
+    for (auto& t : aoTex_) {
+        t.create(hw, hh, {GL_R8}, 0, 1);
+        t.color(0).setFilter(GL_LINEAR, GL_LINEAR);
+        t.color(0).setWrap(GL_CLAMP_TO_EDGE);
+    }
+}
+
+void PostFX::ambientOcclusion(const Framebuffer& scene, float nearZ) {
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
+    const int hw = aoDist_.width(), hh = aoDist_.height();
+    aoDist_.bind();
+    aoDepth_.use();
+    const bool ms = scene.samples() > 1;
+    glBindTextureUnit(ms ? 0 : 1, scene.depth().id());
+    aoDepth_.set("uMultisample", ms ? 1 : 0);
+    aoDepth_.set("uNear", nearZ);
+    gl::drawFullscreenTriangle();
+
+    aoTex_[0].bind();
+    ao_.use();
+    aoDist_.color(0).bind(0);
+    ao_.set("uTexel", glm::vec2(1.0f / hw, 1.0f / hh));
+    ao_.set("uRadius", 0.9f);
+    gl::drawFullscreenTriangle();
+
+    aoBlur_.use();
+    aoDist_.color(0).bind(1);
+    aoTex_[1].bind();
+    aoTex_[0].color(0).bind(0);
+    aoBlur_.set("uDir", glm::vec2(1.0f / hw, 0.0f));
+    gl::drawFullscreenTriangle();
+    aoTex_[0].bind();
+    aoTex_[1].color(0).bind(0);
+    aoBlur_.set("uDir", glm::vec2(0.0f, 1.0f / hh));
+    gl::drawFullscreenTriangle();
+    aoValid_ = true;
 }
 
 void PostFX::resolve(const Framebuffer& scene) {
@@ -75,6 +120,9 @@ void PostFX::composite(int outW, int outH, float exposure, bool bloomOn, float v
     composite_.use();
     hdr_.color(0).bind(0);
     bloom_[0].color(0).bind(1);
+    aoTex_[0].color(0).bind(2);
+    static const bool debugAO = std::getenv("APEX_DEBUG_AO") != nullptr;
+    composite_.set("uAO", aoValid_ ? (debugAO ? -1.0f : 0.75f) : 0.0f);
     composite_.set("uExposure", exposure);
     composite_.set("uBloom", bloomOn && bloomValid_ ? 0.045f : 0.0f);
     composite_.set("uVignette", vignette);

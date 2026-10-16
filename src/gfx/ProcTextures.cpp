@@ -6,7 +6,21 @@
 
 #include <glm/glm.hpp>
 
+#include "core/Log.h"
 #include "core/Noise.h"
+#include "core/Paths.h"
+
+// A private copy of stb_truetype (Dear ImGui compiles its own with static linkage).
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#endif
+#define STBTT_STATIC
+#define STB_TRUETYPE_IMPLEMENTATION
+#include "imstb_truetype.h"
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 namespace apex::proctex {
 
@@ -254,6 +268,149 @@ Texture foliageAtlas() {
         lw = nw;
         lh = nh;
     }
+    tex.setFilter(GL_LINEAR_MIPMAP_LINEAR, GL_LINEAR);
+    tex.setWrap(GL_CLAMP_TO_EDGE);
+    tex.setAnisotropy(8.0f);
+    return tex;
+}
+
+// ---------------------------------------------------------------------------------------- graffiti
+namespace {
+std::vector<int> decodeUtf8(const char* t) {
+    std::vector<int> cps;
+    const auto* s = reinterpret_cast<const unsigned char*>(t);
+    while (*s) {
+        int c = *s++;
+        if (c >= 0xC0 && (*s & 0xC0) == 0x80) c = ((c & 0x1F) << 6) | (*s++ & 0x3F);
+        cps.push_back(c);
+    }
+    return cps;
+}
+}  // namespace
+
+Texture graffitiAtlas(const std::string& fontPath) {
+    const int W = 2048, H = 1024, CW = W / kGraffitiCols, CH = H / kGraffitiRows;
+    std::vector<float> atlas(static_cast<size_t>(W) * H, 0.0f);
+    std::vector<unsigned char> ttf;
+    stbtt_fontinfo font{};
+    const bool haveFont = paths::readBinaryFile(fontPath, ttf) && stbtt_InitFont(&font, ttf.data(), 0);
+    if (!haveFont) LOGW("Graffiti font %s missing: symbols only", fontPath.c_str());
+
+    // fan graffiti: first names, numbers and slogans (German and English), no real brands
+    static const char* kWords[] = {
+        "VOLLGAS", "GRÜNE HÖLLE", "GO MAX!", "ALEX", "FLAT OUT", "NO LIFT", "BRAKE?", "JULIA",
+        "TOMMY", "RING", "SEPP 77", "LUCA", "GAS GAS", "MARCO", "#24", "#7",
+        "NICO", "1927", "LENA", "VAMOS", "HOLD ON", "EIFEL", "JAN", "FINN",
+        "MIA", "BEN", "GO GO GO", "STEFFI", "MAXI", "OLLI", "PAUL", "LOVE",
+        "RINGFREUNDE", "TEAM 14", "HEIZEN!", "FULL SEND", "ALLEZ", "KARIN", "#911", "SCHNELL",
+        "DANKE", "HERO", "LISA", "KIM", "OMA ERNA", "TIMO", "#3", "JONAS",
+        "BIG MO", "GRÜSSE", "HANNES", "ELLA", "FAST", "EMMA", "NOAH", "100%"};
+    const int nWords = static_cast<int>(sizeof(kWords) / sizeof(kWords[0]));
+    Rng rng(4242);
+    std::vector<float> cell(static_cast<size_t>(CW) * CH);
+    for (int ci = 0; ci < kGraffitiCols * kGraffitiRows; ++ci) {
+        std::fill(cell.begin(), cell.end(), 0.0f);
+        auto put = [&](int x, int y, float a) {
+            if (x >= 0 && y >= 0 && x < CW && y < CH) cell[static_cast<size_t>(y) * CW + x] = std::max(cell[static_cast<size_t>(y) * CW + x], a);
+        };
+        if (ci < nWords && haveFont) {
+            const std::vector<int> cps = decodeUtf8(kWords[ci]);
+            // fit the word into the cell
+            float px = 110.0f;
+            float scale = stbtt_ScaleForPixelHeight(&font, px);
+            float width = 0.0f;
+            for (size_t k = 0; k < cps.size(); ++k) {
+                int adv, lsb;
+                stbtt_GetCodepointHMetrics(&font, cps[k], &adv, &lsb);
+                width += adv * scale;
+                if (k + 1 < cps.size()) width += stbtt_GetCodepointKernAdvance(&font, cps[k], cps[k + 1]) * scale;
+            }
+            const float fit = std::min(1.0f, (CW - 20.0f) / std::max(width, 1.0f));
+            scale *= fit;
+            px *= fit;
+            int ascent, descent, gap;
+            stbtt_GetFontVMetrics(&font, &ascent, &descent, &gap);
+            const float shear = rng.range(-0.15f, 0.30f);  // hand-painted italics
+            float pen = (CW - width * fit) * 0.5f;
+            const float baseline = CH * 0.5f + (ascent + descent) * 0.5f * scale;
+            for (size_t k = 0; k < cps.size(); ++k) {
+                int gw, gh, xo, yo;
+                unsigned char* bm = stbtt_GetCodepointBitmap(&font, scale, scale, cps[k], &gw, &gh, &xo, &yo);
+                const float jitterY = rng.range(-4.0f, 4.0f);
+                for (int y = 0; y < gh; ++y)
+                    for (int x = 0; x < gw; ++x) {
+                        float a = bm[y * gw + x] / 255.0f;
+                        if (a <= 0.0f) continue;
+                        float yy = baseline + yo + y + jitterY;
+                        float xx = pen + xo + x + shear * (baseline - yy);
+                        put(static_cast<int>(xx), static_cast<int>(yy), a);
+                    }
+                stbtt_FreeBitmap(bm, nullptr);
+                int adv, lsb;
+                stbtt_GetCodepointHMetrics(&font, cps[k], &adv, &lsb);
+                pen += adv * scale;
+                if (k + 1 < cps.size()) pen += stbtt_GetCodepointKernAdvance(&font, cps[k], cps[k + 1]) * scale;
+            }
+        } else {
+            // painted symbols: heart, arrow, chevrons, smiley, circle-and-cross, stripes
+            const int kind = ci % 6;
+            for (int y = 0; y < CH; ++y)
+                for (int x = 0; x < CW; ++x) {
+                    glm::vec2 p((x + 0.5f - CW * 0.5f) / (CH * 0.45f), (CH * 0.5f - y - 0.5f) / (CH * 0.45f));
+                    float d = 1.0f;
+                    if (kind == 0) {  // heart
+                        glm::vec2 q(std::abs(p.x) * 0.9f, p.y * 1.1f + 0.25f);
+                        float h = q.x * q.x + q.y * q.y - 0.55f;
+                        d = h * h * h - q.x * q.x * q.y * q.y * q.y;
+                        d = d < 0.0f ? -1.0f : 1.0f;
+                    } else if (kind == 1) {  // arrow pointing up the road (towards the top of the cell)
+                        bool shaft = std::abs(p.x) < 0.9f && std::abs(p.y) < 0.18f;
+                        bool head = p.x > 0.6f && p.x < 1.5f && std::abs(p.y) < (1.5f - p.x) * 0.9f;
+                        d = (shaft || head) ? -1.0f : 1.0f;
+                    } else if (kind == 2) {  // >>>
+                        for (int k = 0; k < 3; ++k) {
+                            float u = p.x + 1.2f - k * 0.85f;
+                            if (std::abs(u - 0.5f * (1.0f - std::abs(p.y))) < 0.16f && std::abs(p.y) < 0.9f) d = -1.0f;
+                        }
+                    } else if (kind == 3) {  // smiley
+                        float r = glm::length(p);
+                        bool ring = std::abs(r - 0.85f) < 0.09f;
+                        bool eyes = glm::length(p - glm::vec2(-0.3f, 0.25f)) < 0.13f || glm::length(p - glm::vec2(0.3f, 0.25f)) < 0.13f;
+                        bool mouth = std::abs(glm::length(p - glm::vec2(0.0f, 0.1f)) - 0.5f) < 0.07f && p.y < -0.1f;
+                        d = (ring || eyes || mouth) ? -1.0f : 1.0f;
+                    } else if (kind == 4) {  // number board "circle with a cross"
+                        float r = glm::length(p);
+                        bool ring = std::abs(r - 0.8f) < 0.1f;
+                        bool cross = (std::abs(p.x - p.y) < 0.12f || std::abs(p.x + p.y) < 0.12f) && r < 0.8f;
+                        d = (ring || cross) ? -1.0f : 1.0f;
+                    } else {  // racing stripes
+                        d = (std::abs(p.y) < 0.75f && std::fmod(std::abs(p.x) + 0.1f, 0.5f) < 0.22f && std::abs(p.x) < 1.6f) ? -1.0f : 1.0f;
+                    }
+                    if (d < 0.0f) put(x, y, 1.0f);
+                }
+        }
+        // spray: soften edges a little and add overspray speckle
+        const int cx = (ci % kGraffitiCols) * CW, cy = (ci / kGraffitiCols) * CH;
+        for (int y = 0; y < CH; ++y)
+            for (int x = 0; x < CW; ++x) {
+                float a = cell[static_cast<size_t>(y) * CW + x];
+                float sum = 0.0f;
+                for (int dy = -1; dy <= 1; ++dy)
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        int xx = std::clamp(x + dx, 0, CW - 1), yy = std::clamp(y + dy, 0, CH - 1);
+                        sum += cell[static_cast<size_t>(yy) * CW + xx];
+                    }
+                a = 0.6f * a + 0.4f * sum / 9.0f;
+                if (a < 0.05f && sum > 0.0f && rng.uniform() < 0.08f) a = 0.35f;
+                atlas[static_cast<size_t>(cy + y) * W + cx + x] = a;
+            }
+    }
+    std::vector<uint8_t> bytes(atlas.size());
+    for (size_t i = 0; i < atlas.size(); ++i) bytes[i] = static_cast<uint8_t>(std::clamp(atlas[i], 0.0f, 1.0f) * 255.0f + 0.5f);
+    Texture tex;
+    tex.create2D(W, H, GL_R8, Texture::mipCount(W, H));
+    tex.upload(bytes.data(), GL_RED, GL_UNSIGNED_BYTE);
+    tex.generateMips();
     tex.setFilter(GL_LINEAR_MIPMAP_LINEAR, GL_LINEAR);
     tex.setWrap(GL_CLAMP_TO_EDGE);
     tex.setAnisotropy(8.0f);

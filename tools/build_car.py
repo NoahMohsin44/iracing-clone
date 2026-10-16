@@ -225,9 +225,10 @@ def build_body(mats):
     # creases keep the flat floor, the tail face and the nose crisp under subdivision
     crease = bm.edges.layers.float.get("crease_edge") or bm.edges.layers.float.new("crease_edge")
     for a, b in zip(verts[:-1], verts[1:]):
-        e = bm.edges.get((a[2], b[2]))
-        if e:
-            e[crease] = 1.0
+        for k, value in ((2, 1.0), (3, 0.45), (7, 0.55)):   # floor edge, sill, shoulder line
+            e = bm.edges.get((a[k], b[k]))
+            if e:
+                e[crease] = value
     for ring, value in ((verts[-1], 0.75), (verts[0], 0.5)):
         for k in range(NPT - 1):
             e = bm.edges.get((ring[k], ring[k + 1]))

@@ -96,6 +96,9 @@ public:
     const std::vector<KerbSpan>& kerbs() const { return kerbs_; }
     const std::vector<Section>& sections() const { return sections_; }
     const std::vector<std::string>& attribution() const { return attribution_; }
+    const std::string& directory() const { return directory_; }       // empty for test tracks
+    const std::vector<glm::vec2>& bridges() const { return bridges_; }  // (s0, s1) of bridge decks
+    bool onBridge(float s, float margin = 0.0f) const;
     const Heightmap& nearTerrain() const { return near_; }
     const Heightmap& farTerrain() const { return far_; }
     const std::vector<uint8_t>& landcover() const { return landcover_; }  // RGB at nearTerrain resolution
@@ -140,6 +143,8 @@ private:
     float interpScalar(float s, float TrackSample::*field) const;
 
     std::string name_;
+    std::string directory_;
+    std::vector<glm::vec2> bridges_;
     float length_ = 0.0f;
     float spacing_ = 2.0f;
     std::vector<TrackSample> samples_;

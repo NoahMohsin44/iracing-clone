@@ -54,6 +54,7 @@ struct GraphicsSettings {
     int vegetationQuality = 2;   // 0 low .. 3 ultra
     int textureAnisotropy = 16;
     bool bloom = true;
+    bool ambientOcclusion = true;
     float exposure = 0.0f;       // EV offset
     float fov = 60.0f;           // vertical field of view (degrees)
     float drawDistance = 4000.0f;

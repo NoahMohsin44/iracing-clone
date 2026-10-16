@@ -110,6 +110,7 @@ void visitSettings(V& v, Settings& s) {
     v("graphics", "vegetation_quality", g.vegetationQuality);
     v("graphics", "anisotropy", g.textureAnisotropy);
     v("graphics", "bloom", g.bloom);
+    v("graphics", "ambient_occlusion", g.ambientOcclusion);
     v("graphics", "exposure", g.exposure);
     v("graphics", "fov", g.fov);
     v("graphics", "draw_distance", g.drawDistance);

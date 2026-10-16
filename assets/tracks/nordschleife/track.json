@@ -201,6 +201,31 @@
   "landcover": {
     "file": "landcover.png"
   },
+  "buildings": {
+    "file": "buildings.json"
+  },
+  "bridges": [
+    [
+      74.0,
+      104.0
+    ],
+    [
+      1808.0,
+      1872.0
+    ],
+    [
+      7920.0,
+      7938.0
+    ],
+    [
+      17780.0,
+      17808.0
+    ],
+    [
+      20626.0,
+      20646.0
+    ]
+  ],
   "roadSurface": {
     "file": "road_surface.png",
     "ds": 1.0,

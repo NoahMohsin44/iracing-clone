@@ -79,7 +79,7 @@ void CameraRig::update(double dt, const Car& car, const TrackData& track, Camera
         }
         case CameraMode::Hood: {
             inside_ = false;
-            cam_.position = pos + R * glm::dvec3(0.0, 0.33, -0.95);
+            cam_.position = pos + R * glm::dvec3(0.0, 0.47, -0.95);  // just above the bonnet
             cam_.basis = glm::mat3(R * yawMatrix(lookYaw_));
             break;
         }

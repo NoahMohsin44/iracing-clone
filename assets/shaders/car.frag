@@ -27,7 +27,7 @@ out vec4 fragColor;
 
 const int M_BODY = 0, M_CARBON = 1, M_BLACK = 2, M_GLASS = 3, M_HEAD = 4, M_TAIL = 5, M_CHROME = 6, M_RUBBER = 7,
           M_RIM = 8, M_DISC = 9, M_CALIPER = 10, M_INTERIOR = 11, M_SEAT = 12, M_DISPLAY = 13, M_LINER = 14,
-          M_LEDS = 15, M_CAGE = 16, M_HELMET = 17, M_VISOR = 18, M_SUIT = 19, M_TRIM = 20;
+          M_LEDS = 15, M_CAGE = 16, M_HELMET = 17, M_VISOR = 18, M_SUIT = 19, M_TRIM = 20, M_BANNER = 21;
 
 float sdSeg(vec2 p, vec2 a, vec2 b) {
     vec2 pa = p - a, ba = b - a;
@@ -109,7 +109,9 @@ int classifyModel(vec3 p, vec3 n, out float trim) {
         float d = min(min(xlim - ax, p.y - (0.40 + 0.05 * u * u)), (0.772 - 0.02 * u * u) - p.y);
         if (d > 0.0) {
             trim = d;
-            return d < 0.022 ? M_TRIM : M_GLASS;
+            if (d < 0.022) return M_TRIM;
+            // sun-strip banner across the top of the screen
+            return p.y > 0.725 - 0.02 * u * u ? M_BANNER : M_GLASS;
         }
     }
     // side glass: door window + rear quarter light, black B-pillar between them
@@ -140,7 +142,6 @@ int classifyModel(vec3 p, vec3 n, out float trim) {
     if (n.y > 0.75 && p.z > -1.20 && p.z < -0.84 && ax > 0.14 && ax < 0.50 - (p.z + 1.2) * 0.25) return M_BLACK;
     if (n.y > 0.35 && p.z > -1.22 && p.z < -0.96 && ax > 0.66 && ax < 0.88) return M_BLACK;
     if (abs(n.x) > 0.65 && p.z > -0.99 && p.z < -0.80 && p.y > -0.17 && p.y < 0.19 - (p.z + 0.99) * 0.4) return M_BLACK;
-    if (abs(n.x) > 0.55 && p.z > 0.52 && p.z < 0.80 && p.y > 0.06 + (0.80 - p.z) * 0.25 && p.y < 0.30) return M_BLACK;
     // carbon lower bodywork
     if (p.y < -0.285 || n.y < -0.8) return M_CARBON;
     if (p.z > 2.05 && p.y < -0.02) return M_CARBON;
@@ -158,6 +159,21 @@ vec3 livery(vec3 p, vec3 n, inout float metal) {
     float sweep = -0.11 + (p.z + 2.4) * 0.035;
     if (abs(n.x) > 0.3 && p.y < sweep) c = uPaint2;
     if (abs(n.x) > 0.3 && abs(p.y - sweep) < 0.012) c = uAccent;
+    // modern GT3: rounded white number panel on the doors
+    if (uIsBody == 2 && abs(n.x) > 0.55) {
+        vec2 q = p.zy - vec2(0.10, 0.16);
+        if (p.x > 0.0) q.x = -q.x;  // read the number front-to-back on both sides
+        vec2 e = abs(q) - vec2(0.17, 0.12);
+        float box = length(max(e, 0.0)) + min(max(e.x, e.y), 0.0) - 0.03;
+        if (box < 0.0) {
+            c = vec3(0.88);
+            if (box > -0.012) c = uAccent;
+            vec2 g = q / 0.10;
+            float d = min(sdSeg(g, vec2(-0.42, 0.62), vec2(0.42, 0.62)), sdSeg(g, vec2(0.42, 0.62), vec2(-0.12, -0.72)));
+            if (d < 0.13) c = vec3(0.02);
+        }
+        return c;
+    }
     // door roundel with the race number
     if (abs(n.x) > 0.55) {
         vec2 q = (p.zy - vec2(0.05, 0.06)) / 0.19;
@@ -223,6 +239,10 @@ void main() {
         s.albedo = mix(s.albedo, vec3(0.12, 0.11, 0.10), grime * 0.5);
         s.roughness = mix(s.roughness, 0.7, grime * 0.6);
         s.clearcoat *= 1.0 - grime * 0.5;
+    } else if (mat == M_BANNER) {
+        s.albedo = uPaint2 * 0.8;
+        s.roughness = 0.35;
+        s.clearcoat = 0.5;
     } else if (mat == M_CARBON) {
         vec3 an = abs(nl);
         vec2 uv = an.x > an.y && an.x > an.z ? p.zy : (an.y > an.z ? p.xz : p.xy);
@@ -242,6 +262,12 @@ void main() {
                 s.albedo = mix(vec3(0.004), vec3(0.03), lip);
                 s.ao = mix(0.25, 1.0, lip);
                 s.normal = normalize(N + uWorldToLocalT * vec3(0.0, 0.0, (f - 0.5) * 0.8));
+            } else if (abs(nl.x) > 0.65 && p.z < -0.75 && p.z > -1.0) {
+                // fender outlet: vertical blades
+                float f = fract(p.z * 40.0);
+                float blade = smoothstep(0.0, 0.2, f) * (1.0 - smoothstep(0.4, 0.6, f));
+                s.albedo = mix(vec3(0.004), vec3(0.035), blade);
+                s.ao = mix(0.3, 1.0, blade);
             } else {
                 // honeycomb mesh
                 vec2 h = (abs(nl.z) > abs(nl.x) ? p.xy : p.zy) * 55.0;

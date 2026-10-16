@@ -135,6 +135,7 @@ add_executable(apexsim
   src/world/TrackMesh.cpp
   src/world/Terrain.cpp
   src/world/Vegetation.cpp
+  src/world/Scenery.cpp
   src/car/CarModel.cpp
   src/audio/AudioDevice.cpp
   src/game/App.cpp

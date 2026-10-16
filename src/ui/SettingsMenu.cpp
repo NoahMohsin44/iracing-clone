@@ -88,6 +88,7 @@ SettingsResult SettingsMenu::draw(Settings& s, Input& input, const std::vector<s
             ImGui::SetNextItemWidth(360 * sc);
             if (ImGui::SliderFloat("Draw distance", &g.drawDistance, 1000.0f, 8000.0f, "%.0f m")) res.graphicsChanged = true;
             if (ImGui::Checkbox("Bloom", &g.bloom)) res.graphicsChanged = true;
+            if (ImGui::Checkbox("Ambient occlusion (contact shadows)", &g.ambientOcclusion)) res.graphicsChanged = true;
             ImGui::SetNextItemWidth(360 * sc);
             if (ImGui::SliderFloat("Exposure", &g.exposure, -2.0f, 2.0f, "%+.1f EV")) res.graphicsChanged = true;
             ImGui::Checkbox("Show FPS", &g.showFps);

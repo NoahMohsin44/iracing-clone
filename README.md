@@ -3,14 +3,15 @@
 A sim-racing game in modern C++20 / OpenGL 4.5, in the spirit of iRacing: one car (a GT3), one track
 (the 20.8 km Nürburgring Nordschleife), and a focus on realistic handling, graphics and sound.
 
-![Fuchsröhre](docs/fuchsroehre.png)
+![Fuchsröhre](docs/fuchsroehre.jpg)
 
 | | |
 |---|---|
-| ![menu](docs/menu.png) | ![cockpit](docs/cockpit.png) |
-| ![car](docs/car_side.png) | ![Karussell](docs/karussell.png) |
+| ![menu](docs/menu.jpg) | ![cockpit](docs/cockpit.jpg) |
+| ![car](docs/car.jpg) | ![car rear](docs/car_rear.jpg) |
+| ![Breidscheid](docs/breidscheid.jpg) | ![Flugplatz](docs/flugplatz.jpg) |
 
-*Screenshots are from the software renderer used in CI-style testing (llvmpipe, 2× MSAA, 720p). On a
+*Screenshots are from the software renderer used for automated testing (llvmpipe, 4× MSAA, 1080p). On a
 real GPU, use 4–8× MSAA, Ultra shadows and vegetation, and higher resolutions.*
 
 ## Features
@@ -18,11 +19,17 @@ real GPU, use 4–8× MSAA, Ultra shadows and vegetation, and higher resolutions
 **Track: the real Nordschleife.** The track is built from data, not drawn by hand.
 - The centreline and all 42 named sections (Hatzenbach, Flugplatz, Fuchsröhre, Bergwerk, Karussell,
   Pflanzgarten, Döttinger Höhe, …) come from OpenStreetMap. Length is 20.77 km.
-- Elevation comes from DEM terrain tiles: 300 m of climb from Breidscheid to Hohe Acht, including the
-  Flugplatz crest and the Fuchsröhre compression.
+- **Laser-scanned surface:** the road and the land around it come from DGM1, the state survey's open 1 m
+  airborne-lidar terrain model of Rhineland-Palatinate. That gives the real crests, compressions, cambers
+  and bumps: the Karussell bowl, Flugplatz, Pflanzgarten, the Fuchsröhre dip, and the 300 m climb from
+  Breidscheid to Hohe Acht. The road is a 1 m × 0.5 m height grid sampled smoothly by physics and
+  graphics alike. (Satellite elevation, used before, was off by up to 28 m under the trees.)
 - The real OSM forest/field/village map decides where ~100k spruce and beech trees grow.
-- Road features: kerbs at every corner, the banked Karussell, double armco, grass verges, white lines,
-  a rubbered-in racing line and the start/finish line.
+- Road features: kerbs at every corner, double armco, grass verges, white lines, a rubbered-in racing
+  line, black braking marks into the corners, repair patches, and the start/finish line.
+- Fan graffiti painted across the tarmac, worn away where the cars run.
+- 520 buildings from OpenStreetMap (Breidscheid, the Meuspath test centres, …), marshal posts, and
+  parapets where the track crosses roads on bridges.
 - `tools/build_track.py` regenerates everything from source data.
 
 **Physics** (fixed 1 kHz step, everything in double precision)
@@ -58,8 +65,14 @@ real GPU, use 4–8× MSAA, Ultra shadows and vegetation, and higher resolutions
   anywhere on the 20 km circuit.
 - CC0 photogrammetry PBR textures from Poly Haven (tarmac, grass, forest floor, gravel, bark).
 - GPU heightmap terrain with LODs, a distant forest canopy shell and a 24 km horizon.
-- Procedural GT3 coupé: wing, splitter, diffuser, livery with race number, glowing brakes, shift
-  lights, a cockpit with a moving steering wheel and roll cage.
+- Screen-space ambient occlusion (contact shadows in wheel arches, under the car, at the armco).
+- GT3 car modelled in Blender, from code (`tools/build_car.py`):
+  - lofted body with flared arches, swept LED headlights and a tail-light bar, mesh vents
+  - splitter, canards, swan-neck wing and diffuser
+  - 10-spoke centre-lock wheels and glowing brakes
+  - livery with door number panels and a windscreen banner
+  - a full cockpit: dash display, bucket seat, roll cage, GT3 steering wheel with shift lights, and
+    the driver
 
 **Sound** (procedural, nothing sampled)
 - Cross-plane V8: individual exhaust pulses per cylinder, using the real firing order, so each bank
@@ -104,6 +117,10 @@ real GPU, use 4–8× MSAA, Ultra shadows and vegetation, and higher resolutions
 `cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build`.
 
 **Physics tests:** `build/Release/apexsim_tests` (add `quick` to skip the full lap).
+**Regenerating assets** (optional; the results are in the repo):
+- `python tools/build_track.py` rebuilds the track data. It needs numpy, scipy, pillow and pyproj, and
+  downloads OSM and lidar data on the first run.
+- `blender -b --factory-startup --python tools/build_car.py` rebuilds the car (Blender 4.x).
 **Audio preview:** `apexsim_tests audio out.wav 1` renders a scripted run of the car audio to a WAV
 file (`1` = cockpit mix, `0` = exterior).
 
@@ -156,21 +173,24 @@ src/audio     DSP blocks, engine synth, car audio mix, audio device
 src/gfx       GL wrappers, sky/IBL, shadows, post-processing, renderer
 src/game      app loop, session, cameras, AI driver, lap timer
 src/ui        theme, main menu, settings, HUD
-assets/       shaders, textures, fonts, track data
-tools/        build_track.py (OSM + DEM -> track data), fetch_textures.py
+assets/       shaders, textures, fonts, track data, car model (glTF)
+tools/        build_track.py (OSM + lidar -> track data), build_car.py (Blender), fetch_textures.py
 tests/        headless physics tests + audio preview renderer
 ```
 
 ## Data sources & licences
 
-- Track layout, corner names and land cover: © OpenStreetMap contributors, ODbL 1.0.
-- Elevation: AWS Terrain Tiles (Mapzen), derived from SRTM, EU-DEM and GMTED.
+- Track layout, corner names, land cover and buildings: © OpenStreetMap contributors, ODbL 1.0.
+- Road surface and terrain: DGM1 © GeoBasis-DE / LVermGeoRP (2025), dl-de/by-2-0
+  (www.lvermgeo.rlp.de). Resampled to the track grid and smoothed.
+- Distant elevation: AWS Terrain Tiles (Mapzen), derived from SRTM, EU-DEM and GMTED.
 - Textures: Poly Haven, CC0.
 - Font: Titillium Web, SIL OFL.
-- Libraries: GLFW, Dear ImGui, GLM, miniaudio, stb, glad.
+- Libraries: GLFW, Dear ImGui, GLM, miniaudio, stb, glad, cgltf.
 
 ## Roadmap ideas
 
 - Tyre temperatures and wear, fuel load, car setup screen.
 - Replays, ghost car, AI opponents, the GP circuit / 24h combined layout.
-- Hero car model from Blender (glTF import), recorded engine samples as an option, rain.
+- Recorded engine samples as an option, rain, more trackside detail (grandstands, catch fences,
+  signage).

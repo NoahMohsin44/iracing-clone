@@ -19,6 +19,7 @@ Outputs (assets/tracks/nordschleife/):
   height_near.png   16-bit heightmap around the circuit (4 m grid, lidar), road already carved in
   height_far.png    16-bit heightmap for the horizon (~48 m grid, 24 km square)
   landcover.png     RGB mask aligned with height_near: R forest, G farmland/meadow, B built-up
+  buildings.json    OSM building footprints within 350 m of the circuit (x, z, height, roof type)
 
 World coordinates: X = east, Y = up, Z = south (right-handed, metres), origin at track centre.
 
@@ -419,13 +420,41 @@ def load_landcover(lat_min, lat_max, lon_min, lon_max):
         inner = join_rings([ways[ref][0] for t, ref, role in members if t == "way" and role == "inner" and ref in ways])
         to_ll = lambda ring: [nodes[n] for n in ring if n in nodes]
         polys.append((cls, [to_ll(r) for r in outer], [to_ll(r) for r in inner]))
+    buildings = []
     for wid, (nds, tags) in ways.items():
+        if "building" in tags and len(nds) >= 4 and nds[0] == nds[-1] and all(n in nodes for n in nds):
+            buildings.append((tags, [nodes[n] for n in nds[:-1]]))
         cls = classify(tags)
         if cls is None or len(nds) < 4 or nds[0] != nds[-1]:
             continue
         polys.append((cls, [[nodes[n] for n in nds if n in nodes]], []))
-    print(f"landcover: {len(polys)} polygons")
-    return polys
+    print(f"landcover: {len(polys)} polygons, {len(buildings)} buildings")
+    return polys, buildings
+
+
+def building_record(tags, xz):
+    """Footprint (counter-clockwise seen from above), height and roof style for the game."""
+    x, z = xz[:, 0], xz[:, 1]
+    area2 = np.sum(x * np.roll(z, -1) - np.roll(x, -1) * z)
+    if area2 > 0:              # +z is south, so CCW seen from above has negative shoelace sum
+        xz = xz[::-1]
+    area = abs(area2) / 2
+    kind = tags.get("building", "yes")
+    industrial = kind in ("industrial", "commercial", "retail", "warehouse", "hangar", "service") or area > 650
+    small = kind in ("garage", "garages", "shed", "hut", "carport", "roof", "kiosk") or area < 35
+    height = None
+    for key in ("height", "building:height"):
+        try:
+            height = float(tags.get(key, "").replace("m", "").strip())
+        except ValueError:
+            pass
+    if height is None and tags.get("building:levels", "").isdigit():
+        height = 2.9 * int(tags["building:levels"]) + (0.5 if industrial else 0.0)
+    if height is None:
+        height = 8.5 if industrial else (2.8 if small else 5.8)
+    roof = 0 if (industrial or small or len(xz) > 6) else 1     # 0 flat, 1 gable
+    return {"pts": [[round(float(a), 2), round(float(b), 2)] for a, b in xz], "h": round(height, 2),
+            "roof": roof, "kind": 1 if industrial else (2 if small else 0)}
 
 
 # ----------------------------------------------------------------------------- main
@@ -647,7 +676,7 @@ def main():
 
     # ------------------------------------------------------------------ landcover
     lat_b, lon_b = proj.to_latlon(np.array([xmin, xmax]), np.array([zmax, zmin]))
-    polys = load_landcover(lat_b.min(), lat_b.max(), lon_b.min(), lon_b.max())
+    polys, osm_buildings = load_landcover(lat_b.min(), lat_b.max(), lon_b.min(), lon_b.max())
     layers = [Image.new("L", (nx, nz), 0) for _ in range(3)]
     draws = [ImageDraw.Draw(l) for l in layers]
 
@@ -672,6 +701,30 @@ def main():
     forest_frac = (lc[..., 0] > 127).mean()
     print(f"landcover: forest covers {forest_frac * 100:.1f}% of the near area")
 
+    # ------------------------------------------------------------------ buildings near the circuit
+    records = []
+    for tags, ring in osm_buildings:
+        ll = np.array(ring)
+        bx, bz = proj.to_xz(ll[:, 0], ll[:, 1])
+        d, _ = ctree.query(np.stack([bx, bz], axis=1))
+        if d.min() > 350.0 or d.min() < 9.0:   # nothing on the track itself
+            continue
+        records.append(building_record(tags, np.stack([bx, bz], axis=1)))
+    with open(os.path.join(OUT, "buildings.json"), "w", encoding="utf-8") as f:
+        json.dump({"buildings": records}, f, separators=(",", ":"))
+    print(f"buildings: {len(records)} within 350 m of the circuit")
+
+    # bridge decks (without the interpolation margin), as s ranges
+    bridges = []
+    r = 0
+    while r < rows:
+        if bmask[r]:
+            r0 = r
+            while r < rows and bmask[r]:
+                r += 1
+            bridges.append([round((r0 * SURF_DS + BRIDGE_MARGIN) % length, 1), round(((r - 1) * SURF_DS - BRIDGE_MARGIN) % length, 1)])
+        r += 1
+
     meta = {
         "name": "Nürburgring Nordschleife",
         "length": float(n * SAMPLE_SPACING),
@@ -684,6 +737,8 @@ def main():
         "heightFar": {"file": "height_far.png", "x0": float(-half_far), "z0": float(-half_far), "res": FAR_RES,
                        "w": nf, "h": nf, "min": fmin, "max": fmax},
         "landcover": {"file": "landcover.png"},
+        "buildings": {"file": "buildings.json"},
+        "bridges": bridges,
         "roadSurface": {"file": "road_surface.png", "ds": SURF_DS, "lat0": -SURF_HALF, "dl": SURF_DL,
                         "rows": rows, "cols": len(lat_cols), "scale": SURF_SCALE},
         "attribution": [

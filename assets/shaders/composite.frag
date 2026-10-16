@@ -3,6 +3,8 @@ in vec2 vUV;
 out vec4 fragColor;
 layout(binding = 0) uniform sampler2D uHdr;
 layout(binding = 1) uniform sampler2D uBloomTex;
+layout(binding = 2) uniform sampler2D uAOTex;
+uniform float uAO;      // ambient occlusion strength (0 = off)
 uniform float uExposure;
 uniform float uBloom;
 uniform float uVignette;
@@ -24,6 +26,11 @@ float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.545
 
 void main() {
     vec3 hdr = texture(uHdr, vUV).rgb;
+    if (uAO < 0.0) {  // debug view
+        fragColor = vec4(vec3(texture(uAOTex, vUV).r), 1.0);
+        return;
+    }
+    hdr *= mix(1.0, texture(uAOTex, vUV).r, uAO);
     vec3 bloom = texture(uBloomTex, vUV).rgb;
     vec3 c = mix(hdr, bloom, uBloom) * uExposure;
     c = ACESOut * rrtOdt(ACESIn * c);

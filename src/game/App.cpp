@@ -42,6 +42,7 @@ RenderSettings App::renderSettings() const {
     r.shadowQuality = g.shadowQuality;
     r.vegetationQuality = g.vegetationQuality;
     r.bloom = g.bloom;
+    r.ambientOcclusion = g.ambientOcclusion;
     r.exposureEv = g.exposure;
     r.drawDistance = g.drawDistance;
     r.anisotropy = static_cast<float>(g.textureAnisotropy);
@@ -361,6 +362,8 @@ int App::autotest(const std::string& dir) {
         {"11_car_rear34", 300.0f, CameraMode::Chase, 2.0f, 145.0f, 5.5f, 1.3f},
         {"13_car_front", 300.0f, CameraMode::Chase, 2.0f, 0.0f, 6.0f, 0.6f},
         {"14_car_rear", 300.0f, CameraMode::Chase, 2.0f, 180.0f, 6.0f, 0.9f},
+        {"15_breidscheid_chase", 7840.0f, CameraMode::FarChase, 3.0f},
+        {"16_meuspath_tv", 19050.0f, CameraMode::TV, 3.0f},
     };
     // APEX_SHOTS=car,cockpit renders only the shots whose names contain one of the words
     const char* only = std::getenv("APEX_SHOTS");

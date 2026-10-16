@@ -15,6 +15,7 @@
 #include "gfx/Sky.h"
 #include "gfx/Texture.h"
 #include "world/Terrain.h"
+#include "world/Scenery.h"
 #include "world/TrackData.h"
 #include "world/TrackMesh.h"
 #include "world/Vegetation.h"
@@ -27,6 +28,7 @@ struct RenderSettings {
     int shadowQuality = 2;
     int vegetationQuality = 2;
     bool bloom = true;
+    bool ambientOcclusion = true;
     float exposureEv = 0.0f;
     float drawDistance = 4000.0f;
     float anisotropy = 16.0f;
@@ -87,6 +89,8 @@ private:
     PostFX post_;
     Terrain terrain_;
     TrackMesh trackMesh_;
+    Scenery scenery_;
+    std::vector<int> visibleScenery_;
     Vegetation vegetation_;
     CarModel carModel_;
     Framebuffer scene_;
@@ -98,7 +102,7 @@ private:
 
     Shader terrainSh_, canopySh_, vergeSh_, roadSh_, objectSh_, treeSh_, carSh_, skySh_;
     Shader terrainShadowSh_, meshShadowSh_, treeShadowSh_;
-    Texture tGrass_[3], tForest_[3], tGravel_[3], tAsphalt_[3], tBark_, tFoliage_;
+    Texture tGrass_[3], tForest_[3], tGravel_[3], tAsphalt_[3], tBark_, tFoliage_, tGraffiti_;
     Stats stats_;
     std::vector<int> visibleChunks_;
 };

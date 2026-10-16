@@ -1,4 +1,6 @@
 #pragma once
+#include <string>
+
 #include "gfx/Texture.h"
 
 namespace apex {
@@ -15,6 +17,11 @@ constexpr float kBeechImpostor[4] = {0.25f, 0.5f, 0.5f, 1.0f};
 // 2048x1024 RGBA atlas: spruce branch spray, beech leaf cluster and two tree impostors.
 // Mips are generated with alpha-coverage preservation so foliage doesn't thin out at distance.
 Texture foliageAtlas();
+
+// 2048x1024 R8 atlas of road graffiti (8x8 cells of 256x128): fans' names and slogans painted on
+// the Nordschleife tarmac, rendered with the given TrueType font, plus a few painted symbols.
+constexpr int kGraffitiCols = 8, kGraffitiRows = 8;
+Texture graffitiAtlas(const std::string& fontPath);
 
 }  // namespace proctex
 }  // namespace apex

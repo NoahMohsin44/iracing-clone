@@ -57,11 +57,13 @@ bool Renderer::init(const TrackData& track, const RenderSettings& rs, const std:
     if (!ok) LOGW("Some textures failed to load");
     progress(0.3f, "Painting foliage");
     tFoliage_ = proctex::foliageAtlas();
+    tGraffiti_ = proctex::graffitiAtlas(paths::asset("fonts/TitilliumWeb-Bold.ttf"));
 
     progress(0.4f, "Building terrain");
     terrain_.build(track);
     progress(0.55f, "Building the circuit");
     trackMesh_.build(track);
+    scenery_.build(track);
     progress(0.7f, "Planting the Green Hell");
     vegetation_.build(track, rs.vegetationQuality);
     progress(0.9f, "Assembling the car");
@@ -204,6 +206,12 @@ void Renderer::shadowPass(const Camera& cam, const std::vector<CarVisual>& cars)
             ch.rails.draw();
             ch.posts.draw();
         }
+        scenery_.visible(camPos, f, range, visibleScenery_);
+        for (int idx : visibleScenery_) {
+            const auto& cell = scenery_.cells()[idx];
+            meshShadowSh_.set("uModel", glm::mat4(glm::translate(glm::dmat4(1.0), cell.origin - camPos)));
+            cell.mesh.draw();
+        }
         drawCars(cam, cars, meshShadowSh_, true, 0);
 
         treeShadowSh_.use();
@@ -252,6 +260,7 @@ void Renderer::drawWorld(const Camera& cam, const Frustum& f) {
     tAsphalt_[0].bind(1);
     tAsphalt_[1].bind(2);
     tAsphalt_[2].bind(3);
+    tGraffiti_.bind(4);
     roadSh_.use();
     roadSh_.set("uTrackLength", track_->length());
     for (int idx : visibleChunks_) {
@@ -274,6 +283,16 @@ void Renderer::drawWorld(const Camera& cam, const Frustum& f) {
         objectSh_.set("uRoughness", 0.55f);
         objectSh_.set("uMetallic", 0.8f);
         ch.posts.draw();
+    }
+    // buildings, marshal posts, bridge parapets
+    scenery_.visible(camPos, f, maxDist, visibleScenery_);
+    objectSh_.set("uMode", 3);
+    objectSh_.set("uMetallic", 0.0f);
+    objectSh_.set("uRoughness", 0.8f);
+    for (int idx : visibleScenery_) {
+        const auto& cell = scenery_.cells()[idx];
+        objectSh_.set("uModel", glm::mat4(glm::translate(glm::dmat4(1.0), cell.origin - camPos)));
+        cell.mesh.draw();
     }
 
     // ---- forest
@@ -362,6 +381,8 @@ void Renderer::render(const Camera& camIn, const std::vector<CarVisual>& cars, i
     // ---- post
     glClipControl(GL_LOWER_LEFT, GL_NEGATIVE_ONE_TO_ONE);
     post_.resolve(scene_);
+    if (rs_.ambientOcclusion) post_.ambientOcclusion(scene_, cam.nearZ);
+    else post_.disableAO();
     if (rs_.bloom) post_.bloom();
     post_.composite(windowW, windowH, std::pow(2.0f, rs_.exposureEv), rs_.bloom, cockpit ? 0.35f : 0.22f);
 

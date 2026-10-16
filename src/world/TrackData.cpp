@@ -98,7 +98,9 @@ bool TrackData::load(const std::string& dir) {
         return false;
     }
     name_ = meta["name"].str();
+    directory_ = dir;
     spacing_ = meta["sampleSpacing"].f(2.0f);
+    for (auto& b : meta["bridges"].array()) bridges_.push_back({b[0].f(), b[1].f()});
     for (auto& s : meta["sections"].array()) sections_.push_back({s["name"].str(), s["start"].f()});
     for (auto& a : meta["attribution"].array()) attribution_.push_back(a.str());
 
@@ -572,6 +574,13 @@ float TrackData::barrierAt(float s, int side) const {
 }
 float TrackData::racingLineAt(float s) const { return interpScalar(s, &TrackSample::racingLine); }
 float TrackData::speedHintAt(float s) const { return interpScalar(s, &TrackSample::speedHint); }
+
+bool TrackData::onBridge(float s, float margin) const {
+    s = wrapS(s);
+    for (const auto& b : bridges_)
+        if (s > b.x - margin && s < b.y + margin) return true;
+    return false;
+}
 
 float TrackData::RoadSurface::at(int r, int c) const {
     r = ((r % rows) + rows) % rows;

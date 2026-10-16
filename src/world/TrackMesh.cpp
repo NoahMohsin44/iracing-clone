@@ -74,13 +74,18 @@ void TrackMesh::build(const TrackData& t) {
             const glm::vec3 r = t.rightAt(s);
             const float hwL = t.halfWidthAt(s, -1), hwR = t.halfWidthAt(s, 1);
             const float line = t.racingLineAt(s);
+            // braking zones (from the speed profile's deceleration) collect dark tyre marks;
+            // stored in the road's material channel (road < 0.5 <= kerb)
+            const float v0 = t.speedHintAt(s - 5.0f), v1 = t.speedHintAt(s + 5.0f);
+            const float decel = -0.5f * (v0 + v1) * (v1 - v0) / 10.0f;  // m/s^2
+            const float brake = std::clamp((decel - 5.0f) / 14.0f, 0.0f, 1.0f) * 0.45f;
             // ---- tarmac
             for (int c = 0; c < cols; ++c) {
                 float lat = latFrac[c] < 0 ? latFrac[c] * hwL : latFrac[c] * hwR;
                 Vertex v;
                 v.pos = t.surfacePoint(s, lat) - org;
                 v.uv = glm::vec2(lat, s - ch.s0);
-                v.color = glm::vec4(line, hwL, hwR, 0.0f);
+                v.color = glm::vec4(line, hwL, hwR, brake);
                 v.tangent = glm::vec4(r, 1.0f);
                 road.vertices.push_back(v);
             }
