@@ -251,6 +251,7 @@ void App::frame(double dt) {
         mode = player_.camera;
     }
     session.update(dt, controls_);
+    updateForceFeedback(session);
     if (state_ == State::Menu) {
         mode = CameraMode::Orbit;
         // cycle the menu background between orbit and trackside shots
@@ -295,6 +296,47 @@ void App::frame(double dt) {
         if (r.close) settings_.save(settingsPath_);
     }
     endFrame();
+}
+
+void App::updateForceFeedback(const Session& session) {
+    const auto& c = settings_.controls;
+    FfbConfig cfg;
+    cfg.enabled = c.ffbEnabled;
+    cfg.maxForceNm = c.ffbMaxForce;
+    cfg.minForce = c.ffbMinForce;
+    cfg.damping = c.ffbDamping;
+    cfg.invert = c.ffbInvert;
+    cfg.softLock = c.ffbSoftLock;
+    cfg.carLockDeg = session.car().params().steeringWheelLock;
+    cfg.wheelRotationDeg = c.wheelRotation;
+    cfg.physicsDt = static_cast<float>(Session::kPhysicsDt);
+    // drive the wheel the steering axis is bound to (or the first force feedback device)
+    FfbDeviceHint hint;
+    const Binding& sb = c.secondary[static_cast<int>(Action::Steer)];
+    if (sb.valid() && sb.type == Binding::Type::JoyAxis) {
+        hint.guid = sb.guid;
+        hint.axis = sb.index;
+        hint.rest = sb.rest;
+        hint.full = sb.full;
+        hint.deadzone = c.steerDeadzone;
+        hint.linearity = c.steerLinearity;
+        for (const auto& j : input_.joysticks())
+            if (j.guid == sb.guid) hint.name = j.name;
+    }
+    ffb_.configure(cfg, hint);
+    // only the player's car drives the wheel; the stream stops (and the force fades) when paused
+    if (state_ == State::Driving) ffb_.push(session.ffbSamples());
+
+    const FfbStatus st = ffb_.status();
+    if (st.safetyTrips != ffbTrips_) {
+        ffbTrips_ = st.safetyTrips;
+        if (state_ == State::Driving)
+            player_.flash("Force feedback cut: the wheel ran far past the lock. If it pushes away from centre, "
+                          "tick Invert in Settings > Controls.");
+    }
+    hud_.ffbActive = st.device && c.ffbEnabled;
+    hud_.ffbLevel = st.output;
+    hud_.ffbClipping = st.clipping;
 }
 
 int App::autotest(const std::string& dir) {
@@ -403,6 +445,8 @@ int App::run(int argc, char** argv) {
     ImGui_ImplGlfw_InitForOpenGL(window_, true);
     ImGui_ImplOpenGL3_Init("#version 450 core");
     input_.init(window_, &settings_);
+    ffb_.init(window_);
+    settingsMenu_.setForceFeedback(&ffb_);
 
     loadingFrame(0.0f, "Loading the Nordschleife");
     if (!track_.load(paths::asset("tracks/nordschleife"))) {
@@ -421,6 +465,7 @@ int App::run(int argc, char** argv) {
 
     if (!autotestDir.empty()) {
         int rc = autotest(autotestDir);
+        ffb_.shutdown();
         audioDevice_.shutdown();
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
@@ -453,6 +498,7 @@ int App::run(int argc, char** argv) {
         }
     }
     settings_.save(settingsPath_);
+    ffb_.shutdown();
     audioDevice_.shutdown();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();

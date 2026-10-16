@@ -87,7 +87,11 @@ void Car::resetTo(float s, float lateral) {
         w.slipX = w.slipY = 0.0;
         w.absFactor = 1.0;
         w.trackHint = -1;
+        w.twist = 0.0;
+        w.kickLowpass[0] = w.kickLowpass[1] = 0.0;
     }
+    prevSteer_ = steer_;
+    columnTorque_ = 0.0;
     bodyHints_.fill(-1);
     cgHint_ = -1;
     loc_ = track_->locate(glm::vec3(pos_), -1);
@@ -206,6 +210,7 @@ void Car::step(double dt, const CarInput& in) {
         glm::dvec3 H, C, fg, rg, n, patch;
         double vLong = 0, vLat = 0, radius = 0, fxSlip = 0, fySlip = 0, cDamp = 0, peak = 0;
         double extTorque = 0;
+        double mz = 0, grip = 1, nLong = 0, nLat = 0;  // steering feel
     } sc[4];
 
     for (int i = 0; i < 4; ++i) {
@@ -244,6 +249,10 @@ void Car::step(double dt, const CarInput& in) {
         s.fg = glm::normalize(fw - s.n * glm::dot(fw, s.n));
         s.rg = glm::normalize(glm::cross(s.fg, s.n));
         s.patch = s.C - s.n * dist;
+        // ground normal seen from the wheel (tilts on kerbs and bump faces)
+        s.nLong = glm::dot(s.n, fw);
+        s.nLat = glm::dot(s.n, R * glm::dvec3(std::cos(steer), 0.0, std::sin(steer)));
+        s.grip = surf.grip;
         w.contactPoint = s.patch;
 
         glm::dvec3 vPatch = vel_ + glm::cross(angVel_, s.patch - pos_);
@@ -285,6 +294,7 @@ void Car::step(double dt, const CarInput& in) {
         s.fxSlip = to.fx;
         s.fySlip = to.fy - 7000.0 * wLow * s.vLat * (w.contact ? 1.0 : 0.0);
         s.peak = to.peakForce;
+        s.mz = to.mz;
         w.combinedSlip = to.combinedSlip;
 
         double rr = (tp.rollingResistance + surf.rollingResistance) * fz;
@@ -355,6 +365,7 @@ void Car::step(double dt, const CarInput& in) {
         if (mag > limit) {
             fx *= limit / mag;
             fy *= limit / mag;
+            s.mz *= limit / mag;
         }
         w.fx = fx;
         w.fy = fy;
@@ -366,9 +377,50 @@ void Car::step(double dt, const CarInput& in) {
     }
     drivetrain_.postWheelUpdate(wheels_[2].omega, wheels_[3].omega);
 
+    // ------------------------------------------------------------------ steering torque (force feedback)
+    // Torque about each front kingpin axis, through the rack ratio and power assist to the column.
+    {
+        const SteeringParams& sp = p_.steering;
+        const double dSteer = steer_ - prevSteer_;
+        prevSteer_ = steer_;
+        const double kickAlpha = 1.0 - std::exp(-dt * 2.0 * 3.14159265358979323846 * 2.5);
+        double kingpinSum = 0.0;
+        for (int i = 0; i < 2; ++i) {
+            Wheel& w = wheels_[i];
+            const Scratch& s = sc[i];
+            // fast part of the contact normal tilt: kerb ridges and bump faces push the patch
+            w.kickLowpass[0] += (s.nLong - w.kickLowpass[0]) * kickAlpha;
+            w.kickLowpass[1] += (s.nLat - w.kickLowpass[1]) * kickAlpha;
+            if (!w.contact) {
+                w.twist = 0.0;
+                w.kingpinTorque = 0.0;
+                continue;
+            }
+            const TireParams& tp = p_.front.tire;
+            // contact patch torsion: turning the wheel winds the patch up until it slides (parking
+            // effort), rolling unwinds it within a fraction of a tyre revolution
+            w.twist = (w.twist + dSteer) / (1.0 + dt * std::abs(s.vLong) / sp.twistRelaxation);
+            const double twistLimit = s.grip * tp.mu * w.load * sp.boreLever / sp.twistStiffness;
+            w.twist = std::clamp(w.twist, -twistLimit, twistLimit);
+            double t = -sp.twistStiffness * w.twist;
+            // aligning moment from the pneumatic trail (fades past the peak slip angle) + caster trail
+            t += s.mz - w.fy * sp.casterTrail;
+            // left/right differences in longitudinal force act through the scrub radius
+            t += w.side * (-w.fx) * sp.scrubRadius;
+            // kingpin inclination and caster lift the car as the wheels turn: centring
+            t -= w.load * sp.jackingLever * std::sin(steer_);
+            // kerb / bump impacts
+            const double fxKick = w.load * (s.nLong - w.kickLowpass[0]);
+            const double fyKick = w.load * (s.nLat - w.kickLowpass[1]);
+            t += w.side * (-fxKick) * sp.scrubRadius - fyKick * sp.casterTrail;
+            w.kingpinTorque = t;
+            kingpinSum += t;
+        }
+        columnTorque_ = kingpinSum / p_.steeringRatio() * (1.0 - sp.powerAssist);
+    }
+
     // ------------------------------------------------------------------ suspension + forces on body
     double travelAxle[2][2] = {{wheels_[0].travel, wheels_[1].travel}, {wheels_[2].travel, wheels_[3].travel}};
-    rackTorque_ = 0.0;
     for (int i = 0; i < 4; ++i) {
         Wheel& w = wheels_[i];
         Scratch& s = sc[i];
@@ -381,7 +433,6 @@ void Car::step(double dt, const CarInput& in) {
         glm::dvec3 apply = s.patch + s.n * static_cast<double>(ax.rollCentre);
         F += fh + fnPerp;
         T += glm::cross(apply - pos_, fh + fnPerp);
-        if (w.axle == 0) rackTorque_ += -w.fy * 0.02;
 
         // spring / damper / bump stop / anti-roll bar
         const double vh = glm::dot(vel_ + glm::cross(angVel_, s.H - pos_), up);

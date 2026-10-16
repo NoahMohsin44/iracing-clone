@@ -52,6 +52,7 @@ void Session::resetCarToTrack() {
 
 void Session::update(double frameDt, const DriverControls& in) {
     if (messageTime > 0.0) messageTime -= frameDt;
+    ffbSamples_.clear();
     if (paused) return;
 
     if (!demo_) {
@@ -76,13 +77,17 @@ void Session::update(double frameDt, const DriverControls& in) {
     }
 
     accumulator_ += std::min(frameDt, 0.1);
+    const int stepsThisFrame = std::min(static_cast<int>(accumulator_ / kPhysicsDt), 120);
     int steps = 0;
     while (accumulator_ >= kPhysicsDt && steps < 120) {
         CarInput ci;
         if (demo_) {
             ci = ai_.update(car_, kPhysicsDt);
         } else {
-            ci.steer = in.steer;
+            // steering is sampled once per frame; spread the change over the frame's physics steps so
+            // the tyres (and the force feedback) see a continuous input rather than a staircase
+            const double f = stepsThisFrame > 0 ? std::min(1.0, (steps + 1.0) / stepsThisFrame) : 1.0;
+            ci.steer = static_cast<float>(prevSteerIn_ + (in.steer - prevSteerIn_) * f);
             ci.throttle = in.throttle;
             ci.brake = in.brake;
             ci.clutch = in.clutch;
@@ -91,6 +96,7 @@ void Session::update(double frameDt, const DriverControls& in) {
             pendingShiftUp_ = pendingShiftDown_ = false;
         }
         car_.step(kPhysicsDt, ci);  // the car detects shift edges itself
+        if (!demo_) ffbSamples_.push_back(static_cast<float>(car_.steeringTorque()));
         simTime_ += kPhysicsDt;
         accumulator_ -= kPhysicsDt;
         timer_.update(simTime_, car_.trackLocation().s);
@@ -110,6 +116,7 @@ void Session::update(double frameDt, const DriverControls& in) {
             offTrackTime_ = 0.0;
         }
     }
+    if (steps > 0) prevSteerIn_ = in.steer;
     if (car_.needsReset()) {
         float s = car_.trackLocation().s;
         car_.resetTo(s, track_->racingLineAt(s));

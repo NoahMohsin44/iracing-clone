@@ -1,4 +1,5 @@
 #pragma once
+#include "core/ForceFeedback.h"
 #include "core/Input.h"
 #include "core/Settings.h"
 
@@ -19,6 +20,7 @@ public:
     }
     bool isOpen() const { return open_; }
     void selectTab(int t) { forceTab_ = t; }
+    void setForceFeedback(ForceFeedback* ffb) { ffb_ = ffb; }
     SettingsResult draw(Settings& s, Input& input, const std::vector<std::pair<int, int>>& resolutions);
 
 private:
@@ -27,6 +29,7 @@ private:
     int tab_ = 0;
     Settings backup_;
     int forceTab_ = -1;
+    ForceFeedback* ffb_ = nullptr;
     int captureAction_ = -1;
     bool captureSecondary_ = false;
 };

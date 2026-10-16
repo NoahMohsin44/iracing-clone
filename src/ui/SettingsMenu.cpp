@@ -197,6 +197,63 @@ void SettingsMenu::controlsTab(Settings& s, Input& input) {
     ImGui::SliderFloat("Keyboard steering speed", &c.keyboardSteerSpeed, 0.8f, 5.0f, "%.1f");
     ImGui::Checkbox("Speed-sensitive keyboard / gamepad steering", &c.keyboardSpeedSensitive);
 
+    ui::sectionHeader("FORCE FEEDBACK");
+    FfbStatus st = ffb_ ? ffb_->status() : FfbStatus{};
+    if (!st.supported) {
+        ImGui::TextDisabled("Force feedback needs Windows (DirectInput).");
+    } else if (!c.ffbEnabled) {
+        ImGui::TextDisabled("Off - the wheel is free for other apps.");
+    } else if (!st.device) {
+        ImGui::TextDisabled("No force feedback wheel found.");
+    } else {
+        ImGui::Text("Wheel: %s%s", st.deviceName.c_str(), st.acquired ? "" : "  (waiting for window focus)");
+    }
+    if (st.supported) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Rescan") && ffb_) ffb_->rescan();
+    }
+    ImGui::Checkbox("Enable force feedback", &c.ffbEnabled);
+    ImGui::SetNextItemWidth(360 * sc);
+    ImGui::SliderFloat("Strength (max force)", &c.ffbMaxForce, 5.0f, 60.0f, "%.1f Nm");
+    ImGui::TextDisabled("Steering torque that drives your wheel at 100%%. Lower = stronger forces, but more clipping.\n"
+                        "The GT3 makes about 15-30 Nm at the rim in fast corners and ~13 Nm when parked.");
+    ImGui::BeginDisabled(st.peakNm < 2.0f);
+    if (ImGui::Button("Auto strength") && ffb_) c.ffbMaxForce = std::clamp(st.peakNm * 1.05f, 5.0f, 60.0f);
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::TextDisabled("highest sustained torque so far: %.1f Nm  (drive a lap first)", st.peakNm);
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Reset") && ffb_) ffb_->resetPeak();
+    float minPct = c.ffbMinForce * 100.0f;
+    ImGui::SetNextItemWidth(360 * sc);
+    if (ImGui::SliderFloat("Minimum force", &minPct, 0.0f, 30.0f, "%.0f %%")) c.ffbMinForce = minPct / 100.0f;
+    float dampPct = c.ffbDamping * 100.0f;
+    ImGui::SetNextItemWidth(360 * sc);
+    if (ImGui::SliderFloat("Damping", &dampPct, 0.0f, 50.0f, "%.0f %%")) c.ffbDamping = dampPct / 100.0f;
+    ImGui::Checkbox("Soft lock at the car's steering lock (540 deg)", &c.ffbSoftLock);
+    ImGui::Checkbox("Invert force direction", &c.ffbInvert);
+    ImGui::BeginDisabled(!st.device || !st.acquired);
+    if (ImGui::Button("Test direction") && ffb_) ffb_->startTest();
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::TextDisabled("The wheel should turn RIGHT, then LEFT. If it goes left first, tick Invert.");
+    ImGui::TextUnformatted("Output");
+    ImGui::SameLine();
+    {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        const float w = 360 * sc, h = 12 * sc;
+        dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), IM_COL32(40, 40, 46, 255), 3);
+        const float mid = p.x + w * 0.5f, x = mid + std::clamp(st.output, -1.0f, 1.0f) * w * 0.5f;
+        dl->AddRectFilled(ImVec2(std::min(mid, x), p.y), ImVec2(std::max(mid, x), p.y + h),
+                          st.clipping ? ui::kRed : ui::kYellow, 3);
+        ImGui::Dummy(ImVec2(w, h));
+    }
+    if (st.live) {
+        ImGui::SameLine();
+        ImGui::Text("%.1f Nm   clipping %.0f%% of the time", st.torqueNm, st.clipFraction * 100.0f);
+    }
+
     ui::sectionHeader("BINDINGS");
     ImGui::TextDisabled("Click a slot, then press a key / button. For axes: turn the wheel fully RIGHT or press the pedal fully, then release.");
     if (ImGui::BeginTable("binds", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {

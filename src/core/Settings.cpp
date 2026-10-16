@@ -132,6 +132,12 @@ void visitSettings(V& v, Settings& s) {
     v("controls", "keyboard_steer_speed", c.keyboardSteerSpeed);
     v("controls", "keyboard_speed_sensitive", c.keyboardSpeedSensitive);
     v("controls", "use_gamepad_defaults", c.useGamepadDefaults);
+    v("controls", "ffb_enabled", c.ffbEnabled);
+    v("controls", "ffb_max_force", c.ffbMaxForce);
+    v("controls", "ffb_min_force", c.ffbMinForce);
+    v("controls", "ffb_damping", c.ffbDamping);
+    v("controls", "ffb_soft_lock", c.ffbSoftLock);
+    v("controls", "ffb_invert", c.ffbInvert);
 
     auto& p = s.gameplay;
     v("gameplay", "metric", p.metric);

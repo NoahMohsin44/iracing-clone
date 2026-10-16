@@ -83,6 +83,18 @@ struct AeroParams {
     float centrePressureHeight = 0.12f;  // drag application point above CG (m)
 };
 
+// Steering system: what the driver feels at the wheel rim. Torques about each front kingpin
+// axis are summed and passed through the rack ratio and the power-steering assist.
+struct SteeringParams {
+    float casterTrail = 0.026f;      // mechanical trail from caster (m): lateral force -> centring torque
+    float scrubRadius = 0.020f;      // kingpin offset at the ground (m): Fx differences -> kickback
+    float jackingLever = 0.022f;     // kingpin inclination/caster lift (m): centring torque ~ Fz sin(steer)
+    float twistStiffness = 6000.0f;  // contact patch torsional stiffness (Nm/rad, per tyre)
+    float twistRelaxation = 0.30f;   // rolling distance that unwinds the patch twist (m)
+    float boreLever = 0.034f;        // max patch twist torque = mu * Fz * boreLever (parking effort)
+    float powerAssist = 0.55f;       // fraction of the rack effort carried by the power steering
+};
+
 struct CarParams {
     std::string name = "GT3";
     float mass = 1310.0f;               // with driver and some fuel (kg)
@@ -95,6 +107,7 @@ struct CarParams {
     GearboxParams gearbox;
     DiffParams diff;
     AeroParams aero;
+    SteeringParams steering;
     float steeringWheelLock = 540.0f;   // lock-to-lock of the car's steering wheel (deg)
     float brakeBias = 0.575f;           // front fraction
     float maxBrakeTorque = 12400.0f;    // sum of all four corners at 100% pedal (Nm)
@@ -104,6 +117,10 @@ struct CarParams {
 
     float frontAxleZ() const { return -wheelbase * (1.0f - frontWeight); }  // ahead of the CG
     float rearAxleZ() const { return wheelbase * frontWeight; }
+    // steering wheel angle / road wheel angle
+    float steeringRatio() const {
+        return front.maxSteer > 0.0f ? steeringWheelLock * 0.5f * 0.0174532925f / front.maxSteer : 1.0f;
+    }
 
     static CarParams gt3();
 };

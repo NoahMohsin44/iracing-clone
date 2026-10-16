@@ -35,8 +35,18 @@ real GPU, use 4–8× MSAA, Ultra shadows and vegetation, and higher resolutions
   Clutch-pack LSD (preload + power/coast ramps).
 - Aero: CdA 1.25, ClA 3.0 with balance; ~600 kg of downforce at 200 km/h.
 - ABS, 6-level traction control and adjustable brake bias. Brake-disc temperature makes the discs glow.
+- Steering torque is computed physically about each front kingpin, then passed through the 12.3:1 rack
+  and the power steering to the column. This is what force feedback plays:
+  - the tyres' aligning moment (pneumatic trail), which fades as the fronts pass their peak slip
+    angle, so the wheel goes light when you understeer
+  - caster trail
+  - scrub radius, which turns left/right braking and kerb strikes into kickback
+  - kingpin-inclination centring
+  - contact-patch twist, which makes the wheel heavy when parked and frees up once rolling
+  - the wheel goes light when the front wheels leave the ground (Flugplatz!)
 - Validated by `apexsim_tests`: 0–100 km/h in 3.6 s, 0–200 in 9.2 s, 271 km/h top speed, 200–0 in
   ~80 m, ~1.7 g mid-speed grip, and a clean AI lap of the Nordschleife in ~7:44 (real GT3: ~7:00).
+  Steering: ~17-28 Nm at the rim at the limit, ~13 Nm when parked.
 
 **Graphics** (forward HDR renderer)
 - PBR (GGX / Smith / Schlick), with a clear-coat lobe for car paint and carbon.
@@ -67,7 +77,8 @@ real GPU, use 4–8× MSAA, Ultra shadows and vegetation, and higher resolutions
 - Settings, saved to `settings.ini`:
   - graphics (resolution, window mode, MSAA, render scale, shadows, vegetation, FOV…)
   - audio mix
-  - controls: rebind any key, button or axis; calibrate pedals; set wheel rotation for 1:1 steering
+  - controls: rebind any key, button or axis; calibrate pedals; set wheel rotation for 1:1 steering;
+    force feedback
   - assists
 - Cameras: cockpit (with g-force head movement), hood, chase, far chase and TV.
 
@@ -119,14 +130,26 @@ file (`1` = cockpit mix, `0` = exterior).
 3. For each pedal, press it fully and release.
 4. Set *Wheel rotation* to your wheel's range so steering is 1:1 with the car's 540° wheel.
 
-Force feedback isn't implemented yet (see the roadmap).
+**Force feedback** (Windows, DirectInput; any FFB wheel: Logitech, Thrustmaster, Fanatec, Moza, Simucube,
+…). Like iRacing, there are no canned effects. The wheel plays the car's steering column torque from
+the 1 kHz physics, buffered so none of the detail is lost between frames.
+- **Strength** is the torque (Nm) that drives your wheel at 100 %. Lower values give stronger forces
+  but more *clipping* (the signal flat-lining at 100 %). The yellow bar next to the pedals on the HUD
+  turns red while clipping.
+- After a lap, *Auto strength* sets it from the highest torque you saw.
+- *Soft lock* stops the wheel at the car's 540° when your wheel can turn further.
+- *Minimum force* helps gear and belt wheels with a dead spot in the centre.
+- *Damping* adds weight on direct-drive wheels.
+- Use *Test direction* once: the wheel should turn right, then left. If it doesn't, tick *Invert force
+  direction*.
+- The wheel goes limp in menus and when paused, and the game lets go of it when it loses focus.
 
 **Field of view:** a realistic vertical FOV for one monitor is 35–45°. Change it in *Settings → Graphics*.
 
 ## Project layout
 
 ```
-src/core      settings, input, logging, paths, JSON, noise
+src/core      settings, input, force feedback, logging, paths, JSON, noise
 src/world     track data and queries, track/terrain meshes, vegetation
 src/car       tyre model, drivetrain, chassis physics, GT3 parameters, procedural car model
 src/audio     DSP blocks, engine synth, car audio mix, audio device
@@ -148,7 +171,6 @@ tests/        headless physics tests + audio preview renderer
 
 ## Roadmap ideas
 
-- Force feedback (DirectInput) driven by the tyres' self-aligning torque, which is already computed.
 - Tyre temperatures and wear, fuel load, car setup screen.
 - Replays, ghost car, AI opponents, the GP circuit / 24h combined layout.
 - Hero car model from Blender (glTF import), recorded engine samples as an option, rain.

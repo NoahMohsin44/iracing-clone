@@ -37,6 +37,8 @@ struct Wheel {
     double steerAngle = 0.0;
     double absFactor = 1.0;
     double brakeTemp = 60.0;    // deg C
+    double twist = 0.0;         // contact patch torsion about the vertical (rad), front wheels
+    double kickLowpass[2] = {0.0, 0.0};  // slow part of the contact normal tilt (wheel frame)
     int trackHint = -1;
 
     // per-step outputs
@@ -49,6 +51,7 @@ struct Wheel {
     double camber = 0.0;
     double brakeTorque = 0.0;
     double driveTorque = 0.0;
+    double kingpinTorque = 0.0; // torque about the steering axis (Nm, + steers right)
     glm::dvec3 centre{0.0};
     glm::dvec3 contactPoint{0.0};
     glm::dvec3 contactNormal{0.0, 1.0, 0.0};
@@ -86,7 +89,8 @@ public:
     const TrackLocation& trackLocation() const { return loc_; }
     double steeringAngle() const { return steer_; }    // front wheel angle (rad)
     double steeringWheelDeg() const;                   // driver steering wheel angle
-    double steeringTorque() const { return rackTorque_; }  // self-aligning (Nm at the rack), for FFB
+    // Torque at the steering column (Nm, + turns the wheel clockwise): the force feedback signal.
+    double steeringTorque() const { return columnTorque_; }
     glm::dvec3 localAcceleration() const { return accelLocal_; }  // m/s^2 in body frame, excludes gravity
     bool absActive() const { return absActive_; }
     bool tcActive() const { return tcActive_; }
@@ -120,7 +124,8 @@ private:
     double massSprung_ = 1000.0;
     double massUnsprung_ = 0.0;
     double steer_ = 0.0;
-    double rackTorque_ = 0.0;
+    double prevSteer_ = 0.0;
+    double columnTorque_ = 0.0;
     double throttle_ = 0.0, brake_ = 0.0, clutch_ = 0.0;
     double tcFactor_ = 1.0;
     bool absActive_ = false, tcActive_ = false;

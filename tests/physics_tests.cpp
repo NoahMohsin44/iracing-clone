@@ -12,6 +12,7 @@
 
 #include "audio/CarAudio.h"
 #include "car/Car.h"
+#include "core/FfbSignal.h"
 #include "core/Log.h"
 #include "core/Paths.h"
 #include "game/AIDriver.h"
@@ -167,7 +168,7 @@ void testSkidpad(float radius, float startKmh) {
     car.resetTo(0.0f, 0.0f);
     // simple line follower at constant radius with a slowly increasing speed target
     double target = startKmh / 3.6;
-    double steerI = 0, best = 0, bestV = 0, accLat = 0;
+    double steerI = 0, best = 0, bestV = 0, accLat = 0, colTq = 0, bestTq = 0, peakTq = 0, steerSum = 0, bestSteer = 0;
     int window = 0;
     double drift = 0;
     for (int i = 0; i < 240000; ++i) {
@@ -185,12 +186,19 @@ void testSkidpad(float radius, float startKmh) {
         car.step(kDt, in);
         if (i > 15000) target += kDt * 0.25;
         accLat += car.localAcceleration().x;
+        colTq += car.steeringTorque();
+        steerSum += in.steer;
         if (++window == 1000) {
             double g = std::abs(accLat / window) / 9.81;
+            if (std::abs(loc.lateral) < 2.5) peakTq = std::max(peakTq, std::abs(colTq / window));
             if (std::abs(loc.lateral) < 2.5 && g > best) {
                 best = g;
                 bestV = car.speed() * 3.6;
+                bestTq = colTq / window;
+                bestSteer = steerSum / window;
             }
+            colTq = 0;
+            steerSum = 0;
             if (std::abs(loc.lateral) > 6.0) drift += 1;
             accLat = 0;
             window = 0;
@@ -198,6 +206,156 @@ void testSkidpad(float radius, float startKmh) {
         }
     }
     printf("  max steady lateral acceleration: %.2f g at %.0f km/h\n", best, bestV);
+    printf("  steering: %.0f deg at the wheel, column torque %.1f Nm at the limit, peak %.1f Nm\n",
+           bestSteer * car.params().steeringWheelLock * 0.5, bestTq, peakTq);
+    check(bestTq * bestSteer < 0.0, "steering torque centres the wheel in a steady corner");
+    check(peakTq > 6.0 && peakTq < 40.0, "cornering steering torque in the GT3 range (6-40 Nm)");
+    // (the big skidpad runs out of engine before it runs out of grip)
+    if (radius < 100.0f) check(std::abs(bestTq) < peakTq * 0.98, "steering goes light past the front tyres' peak slip angle");
+}
+
+void testSteeringFeel(const TrackData& track) {
+    printf("\n== Steering feel (column torque)\n");
+    Car car;
+    car.init(CarParams::gt3(), &track);
+    car.resetTo(20.0f, 0.0f);
+    CarInput in;
+    for (int i = 0; i < 3000; ++i) car.step(kDt, in);
+    // parking: turn a quarter of the lock in 0.5 s, then hold
+    double turning = 0, holding = 0;
+    for (int i = 0; i < 1500; ++i) {
+        in.steer = static_cast<float>(std::min(1.0, i / 500.0) * 0.25);
+        car.step(kDt, in);
+        if (i == 450) turning = car.steeringTorque();
+        if (i == 1499) holding = car.steeringTorque();
+    }
+    printf("  standstill: %.1f Nm while turning, %.1f Nm holding\n", turning, holding);
+    check(turning < -3.0 && turning > -30.0, "parking effort resists the driver (3-30 Nm)");
+    check(holding < -1.0, "wound-up tyres keep pushing the wheel back at standstill");
+
+    // on-centre feel at 150 km/h: a small steering input gives a linear, centring torque
+    Car c2;
+    c2.init(CarParams::gt3(), &track);
+    c2.setAutoShift(true);
+    c2.resetTo(20.0f, 0.0f);
+    AIDriver ai;
+    ai.init(&track);
+    double t1 = 0, t2 = 0;
+    for (int i = 0; i < 60000; ++i) {
+        CarInput ci = ai.update(c2, kDt);
+        double err = 150.0 / 3.6 - c2.forwardSpeed();
+        ci.throttle = static_cast<float>(std::clamp(err * 0.5, 0.0, 1.0));
+        ci.brake = 0.0f;
+        if (c2.speed() > 150.0 / 3.6 - 0.5) {
+            // two short steering holds (2 and 4 deg of steering wheel) with the AI otherwise driving
+            double base = ci.steer;
+            for (int k = 0; k < 200; ++k) {
+                CarInput h = ci;
+                h.steer = static_cast<float>(base + 2.0 / 270.0);
+                c2.step(kDt, h);
+            }
+            t1 = c2.steeringTorque();
+            for (int k = 0; k < 200; ++k) {
+                CarInput h = ci;
+                h.steer = static_cast<float>(base + 4.0 / 270.0);
+                c2.step(kDt, h);
+            }
+            t2 = c2.steeringTorque();
+            break;
+        }
+        c2.step(kDt, ci);
+    }
+    printf("  150 km/h on-centre: %.2f Nm at +2 deg, %.2f Nm at +4 deg\n", t1, t2);
+    check(t1 < 0.0 && t2 < t1, "on-centre torque centres the wheel and builds with steering angle");
+}
+
+void testForceFeedbackSignal() {
+    printf("\n== Force feedback signal path\n");
+    // 60 fps frames each deliver ~16-17 physics samples of a 20 Hz kerb-like torque; the device
+    // thread ticks every ~1 ms with jitter. Playback should be smooth and only ~1 frame late.
+    FfbSignal sig;
+    FfbConfig cfg;
+    cfg.maxForceNm = 20.0f;
+    const double amp = 8.0, hz = 20.0;
+    auto torqueAt = [&](double t) { return amp * std::sin(2.0 * 3.14159265358979 * hz * t); };
+    double simT = 0.0, realT = 0.0, nextFrame = 0.0, acc = 0.0;
+    std::vector<std::pair<double, double>> outT;  // (real time, played torque)
+    uint32_t rng = 12345;
+    auto jitter = [&]() { rng = rng * 1664525u + 1013904223u; return ((rng >> 8) & 0xffff) / 65535.0; };
+    while (realT < 3.0) {
+        if (realT >= nextFrame) {
+            acc += 1.0 / 60.0;
+            std::vector<float> burst;
+            while (acc >= 0.001) {
+                simT += 0.001;
+                acc -= 0.001;
+                burst.push_back(static_cast<float>(torqueAt(simT)));
+            }
+            sig.push(burst.data(), static_cast<int>(burst.size()));
+            nextFrame += 1.0 / 60.0;
+        }
+        const double dt = 0.0008 + 0.0006 * jitter();
+        realT += dt;
+        FfbSignal::Output o = sig.tick(dt, std::nan(""), cfg);
+        if (realT > 1.0) outT.push_back({realT, o.torqueNm});
+    }
+    // best lag and residual
+    double bestErr = 1e9, bestLag = 0.0, maxStep = 0.0;
+    for (double lag = 0.0; lag < 0.06; lag += 0.0005) {
+        double e = 0.0;
+        for (auto& [t, v] : outT) e += (v - torqueAt(t - lag)) * (v - torqueAt(t - lag));
+        e = std::sqrt(e / outT.size());
+        if (e < bestErr) {
+            bestErr = e;
+            bestLag = lag;
+        }
+    }
+    for (size_t i = 1; i < outT.size(); ++i) maxStep = std::max(maxStep, std::abs(outT[i].second - outT[i - 1].second));
+    printf("  playback: %.1f ms latency, rms error %.2f Nm of %.0f, largest step %.2f Nm (60 fps -> 1 kHz)\n",
+           bestLag * 1000.0, bestErr, amp, maxStep);
+    check(bestLag < 0.035, "playback latency under ~2 frames");
+    check(bestErr < amp * 0.15, "20 Hz detail survives 60 fps frames (no staircase)");
+    check(maxStep < amp * 0.25, "no frame-rate steps in the output");
+
+    // shaping
+    FfbSignal s2;
+    std::vector<float> ten(20, 10.0f), thirty(20, 30.0f);
+    s2.push(ten.data(), 20);
+    FfbSignal::Output o;
+    for (int i = 0; i < 1000; ++i) {  // past the 0.6 s fade-in
+        if (i % 16 == 0) s2.push(ten.data(), 16);
+        o = s2.tick(0.001, std::nan(""), cfg);
+    }
+    printf("  10 Nm with 20 Nm strength -> %.2f output\n", o.force);
+    check(std::abs(o.force - 0.5f) < 0.02f && !o.clipping, "strength maps column torque linearly");
+    for (int i = 0; i < 100; ++i) {
+        if (i % 16 == 0) s2.push(thirty.data(), 16);
+        o = s2.tick(0.001, std::nan(""), cfg);
+    }
+    check(std::abs(o.force - 1.0f) < 1e-3f && o.clipping, "torque beyond the strength clips (and is reported)");
+    // soft lock: 10 deg past the car's 270 deg (half lock) to the right -> full force to the left
+    for (int i = 0; i < 20; ++i) {
+        if (i % 16 == 0) s2.push(ten.data(), 16);
+        o = s2.tick(0.001, 280.0, cfg);
+    }
+    check(o.force < -0.99f, "soft lock pushes the wheel back from past the lock");
+    FfbConfig cfgMin = cfg;
+    cfgMin.minForce = 0.1f;
+    std::vector<float> tiny(16, 0.4f);  // 2 % of the strength
+    for (int i = 0; i < 50; ++i) {
+        if (i % 16 == 0) s2.push(tiny.data(), 16);
+        o = s2.tick(0.001, 0.0, cfgMin);
+    }
+    check(std::abs(o.force - (0.1f + 0.9f * 0.02f)) < 0.01f, "minimum force lifts small forces");
+    // stream stops (pause): fade out
+    for (int i = 0; i < 600; ++i) o = s2.tick(0.001, 0.0, cfg);
+    check(std::abs(o.force) < 1e-3f && !o.live, "force fades out when the simulation pauses");
+    // runaway guard: wheel 50 deg past the lock while pushing back at full force
+    for (int i = 0; i < 700; ++i) {
+        if (i % 16 == 0) s2.push(ten.data(), 16);
+        o = s2.tick(0.001, i < 650 ? 0.0 : 320.0, cfg);
+    }
+    check(s2.safetyTrips() == 1 && o.safetyCut && o.force == 0.0f, "runaway guard mutes a wheel that runs far past the lock");
 }
 
 void testLap() {
@@ -371,6 +529,8 @@ int main(int argc, char** argv) {
     testStandstill(straight);
     testAcceleration(straight);
     testBraking(straight);
+    testSteeringFeel(straight);
+    testForceFeedbackSignal();
     testSkidpad(80.0f, 60.0f);
     testSkidpad(300.0f, 130.0f);
     if (!quick) testLap();

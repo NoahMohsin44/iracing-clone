@@ -49,6 +49,8 @@ public:
         messageTime = 3.0;
     }
     int lastWheelsOff() const { return wheelsOff_; }
+    // Steering column torque (Nm) of every physics step of the last update, for force feedback.
+    const std::vector<float>& ffbSamples() const { return ffbSamples_; }
 
 private:
     const TrackData* track_ = nullptr;
@@ -64,6 +66,8 @@ private:
     int wheelsOff_ = 0;
     int lastLapEvent_ = 0;
     bool pendingShiftUp_ = false, pendingShiftDown_ = false;
+    float prevSteerIn_ = 0.0f;
+    std::vector<float> ffbSamples_;
 };
 
 }  // namespace apex

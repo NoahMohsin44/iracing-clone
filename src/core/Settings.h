@@ -80,6 +80,15 @@ struct ControlSettings {
     float keyboardSteerSpeed = 2.2f;  // full-lock per second at standstill
     bool keyboardSpeedSensitive = true;
     bool useGamepadDefaults = true;   // use SDL gamepad mapping if no explicit controller bindings
+
+    // Force feedback (steering wheels). Strength is the steering column torque, in Nm, that drives
+    // the wheel at 100 %: lower = stronger forces but more clipping, like iRacing's "max force".
+    bool ffbEnabled = true;
+    float ffbMaxForce = 22.0f;
+    float ffbMinForce = 0.0f;         // 0..0.3, lifts small forces above gear/belt friction
+    float ffbDamping = 0.05f;         // 0..1, wheel-side damper
+    bool ffbSoftLock = true;          // stop the wheel at the car's 540 deg lock
+    bool ffbInvert = false;           // for wheels that push the wrong way
 };
 
 struct GameplaySettings {

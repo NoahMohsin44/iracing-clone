@@ -4,6 +4,7 @@
 
 #include "audio/AudioDevice.h"
 #include "audio/CarAudio.h"
+#include "core/ForceFeedback.h"
 #include "core/Input.h"
 #include "core/Settings.h"
 #include "game/Session.h"
@@ -33,6 +34,7 @@ private:
     void startPractice();
     void backToMenu();
     void drawPauseMenu();
+    void updateForceFeedback(const Session& session);
     void screenshot(const std::string& path);
     RenderSettings renderSettings() const;
     std::vector<std::pair<int, int>> resolutions() const;
@@ -42,6 +44,8 @@ private:
     Settings settings_;
     std::string settingsPath_;
     Input input_;
+    ForceFeedback ffb_;
+    int ffbTrips_ = 0;
     TrackData track_;
     Renderer renderer_;
     CarAudio audio_;

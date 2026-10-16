@@ -102,6 +102,7 @@ add_library(apex_sim STATIC
   src/core/Settings.cpp
   src/core/Noise.cpp
   src/core/Json.cpp
+  src/core/FfbSignal.cpp
   src/world/TrackData.cpp
   src/car/Tire.cpp
   src/car/Drivetrain.cpp
@@ -119,6 +120,7 @@ apex_target_settings(apex_sim)
 add_executable(apexsim
   src/main.cpp
   src/core/Input.cpp
+  src/core/ForceFeedback.cpp
   src/gfx/GLUtil.cpp
   src/gfx/Shader.cpp
   src/gfx/Texture.cpp
@@ -146,6 +148,8 @@ target_compile_definitions(apexsim PRIVATE GLFW_INCLUDE_NONE)
 apex_target_settings(apexsim)
 
 if(WIN32)
+  # DirectInput force feedback (wheels), high-resolution timer for the FFB thread
+  target_link_libraries(apexsim PRIVATE dinput8 dxguid winmm)
   set_target_properties(apexsim PROPERTIES WIN32_EXECUTABLE $<CONFIG:Release>)
   if(MSVC)
     target_link_options(apexsim PRIVATE $<$<CONFIG:Release>:/ENTRY:mainCRTStartup>)

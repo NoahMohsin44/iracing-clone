@@ -88,7 +88,7 @@ void Hud::draw(const Session& s, const TrackData& track, const Settings& setting
 
         // ------------------------------------------------------------ pedals + steering (left of centre)
         {
-            ImVec2 q0(p0.x - 120 * sc, p0.y), q1(p0.x - 14 * sc, by);
+            ImVec2 q0(p0.x - (ffbActive ? 150 : 120) * sc, p0.y), q1(p0.x - 14 * sc, by);
             dl->AddRectFilled(q0, q1, ui::kPanel, 10 * sc);
             float bh = (q1.y - q0.y) - 30 * sc;
             auto bar = [&](int i, float val, ImU32 col) {
@@ -100,6 +100,7 @@ void Hud::draw(const Session& s, const TrackData& track, const Settings& setting
             bar(0, static_cast<float>(car.appliedClutch()), ui::kBlue);
             bar(1, static_cast<float>(car.appliedBrake()), ui::kRed);
             bar(2, static_cast<float>(car.appliedThrottle()), ui::kGreen);
+            if (ffbActive) bar(3, std::min(1.0f, std::abs(ffbLevel)), ffbClipping ? ui::kRed : ui::kYellow);
             // steering indicator under the panel
             float st = static_cast<float>(car.steeringAngle() / car.params().front.maxSteer);
             ImVec2 c0(q0.x, by + 8 * sc), c1(q1.x, by + 14 * sc);
