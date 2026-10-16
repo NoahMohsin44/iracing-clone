@@ -232,7 +232,7 @@ void Vegetation::build(const TrackData& track, int quality) {
                 bool nearCamera = false;
                 for (const auto& c : tvSpots) {
                     float dx = c.x - p.x, dz = c.z - p.z;
-                    if (dx * dx + dz * dz < 11.0f * 11.0f) nearCamera = true;
+                    if (dx * dx + dz * dz < 15.0f * 15.0f) nearCamera = true;
                 }
                 if (nearCamera) continue;
                 // not too close to any other part of the circuit

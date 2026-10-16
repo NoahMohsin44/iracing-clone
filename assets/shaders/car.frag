@@ -44,7 +44,7 @@ float sideWindow(vec2 zy) {
     // polygon in (z, y), returns distance inside (negative = outside)
     float e0 = zy.y - 0.36;                                          // bottom
     float e1 = 0.71 - zy.y;                                          // top
-    float e2 = edgeF(zy, vec2(-0.46, 0.36), vec2(-0.05, 0.705));     // A-pillar (front)
+    float e2 = edgeF(zy, vec2(-0.51, 0.36), vec2(-0.11, 0.705));     // A-pillar (front)
     float e3 = -edgeF(zy, vec2(0.93, 0.37), vec2(0.46, 0.705));      // C-pillar (rear)
     float bp = abs(zy.x - 0.245) - 0.045;                            // B-pillar
     return min(min(min(e0, e1), min(e2, e3)), bp);
@@ -55,7 +55,7 @@ int classifyBody(vec3 p, vec3 n, out float trim) {
     float ax = abs(p.x);
     // windscreen
     if (p.z > -0.80 && p.z < -0.11 && p.y > 0.235 && n.y > 0.25) {
-        float edge = min(min(p.z + 0.80, -0.11 - p.z), (0.47 - max(0.0, p.y - 0.55) * 0.3) - ax);
+        float edge = min(min(p.z + 0.80, -0.11 - p.z), (0.50 - max(0.0, p.y - 0.55) * 0.3) - ax);
         if (edge > 0.0) {
             trim = edge;
             return edge < 0.025 ? M_TRIM : M_GLASS;
@@ -97,7 +97,7 @@ vec3 livery(vec3 p, vec3 n, inout float metal) {
     // door roundel with the race number
     if (abs(n.x) > 0.55) {
         vec2 q = (p.zy - vec2(0.05, 0.06)) / 0.19;
-        if (p.x < 0.0) q.x = -q.x;
+        if (p.x > 0.0) q.x = -q.x;  // read the number front-to-back on both sides
         float r = length(q);
         if (r < 1.0) {
             c = vec3(0.85);

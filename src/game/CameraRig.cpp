@@ -22,9 +22,10 @@ glm::dmat3 yawMatrix(double a) {
 glm::vec3 CameraRig::tvCameraSpot(const TrackData& track, int index, int& side) {
     float camS = track.wrapS(index * kTvSpacing + kTvSpacing * 0.15f);
     side = (index % 2 == 0) ? 1 : -1;
-    float lat = side * (track.barrierAt(camS, side) + 1.6f);
+    // on the grass verge inside the armco, raised like a broadcast camera platform
+    float lat = side * (track.halfWidthAt(camS, side) + 2.2f);
     glm::vec3 p = track.surfacePoint(camS, lat);
-    p.y = track.terrainHeight(p.x, p.z) + 4.5f;
+    p.y += 3.2f;
     return p;
 }
 

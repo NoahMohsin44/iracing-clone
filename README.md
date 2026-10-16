@@ -3,7 +3,15 @@
 A sim-racing game in modern C++20 / OpenGL 4.5, in the spirit of iRacing: one car (a GT3), one track
 (the 20.8 km Nürburgring Nordschleife), and a focus on realistic handling, graphics and sound.
 
-![menu](docs/menu.png)
+![Fuchsröhre](docs/fuchsroehre.png)
+
+| | |
+|---|---|
+| ![menu](docs/menu.png) | ![cockpit](docs/cockpit.png) |
+| ![car](docs/car_side.png) | ![Karussell](docs/karussell.png) |
+
+*Screenshots are from the software renderer used in CI-style testing (llvmpipe, 2× MSAA, 720p). On a
+real GPU, use 4–8× MSAA, Ultra shadows and vegetation, and higher resolutions.*
 
 ## Features
 

@@ -40,7 +40,7 @@ void main() {
         vec3 arm = texture(uAsphaltARM, uv).rgb;
         // large-scale patches: resurfaced sections, staining
         float patchN = fbm(vec2(s * 0.004, lat * 0.03), 3);
-        albedo *= mix(0.78, 1.18, patchN);
+        albedo *= mix(0.95, 1.45, patchN);  // aged, light grey Nordschleife tarmac with resurfaced patches
         // rubbered-in racing line
         float dl = abs(lat - vColor.x);
         float rubber = (1.0 - smoothstep(0.5, 1.7, dl)) * (0.55 + 0.45 * fbm(vec2(s * 0.05, lat * 2.0), 3));
