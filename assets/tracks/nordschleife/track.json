@@ -1,0 +1,208 @@
+{
+  "name": "Nürburgring Nordschleife",
+  "length": 20770.0,
+  "sampleSpacing": 2.0,
+  "origin": {
+    "lat": 50.3591155,
+    "lon": 6.96278395,
+    "elevation": 310.0
+  },
+  "startOffset": 0.0,
+  "sections": [
+    {
+      "name": "T13",
+      "start": 0.0
+    },
+    {
+      "name": "Sabine-Schmitz-Kurve",
+      "start": 132.0
+    },
+    {
+      "name": "Hatzenbogen",
+      "start": 318.0
+    },
+    {
+      "name": "Hatzenbach",
+      "start": 698.0
+    },
+    {
+      "name": "Hocheichen",
+      "start": 1412.0
+    },
+    {
+      "name": "Quiddelbacher Höhe",
+      "start": 1892.0
+    },
+    {
+      "name": "Flugplatz",
+      "start": 2242.0
+    },
+    {
+      "name": "Schwedenkreuz",
+      "start": 2932.0
+    },
+    {
+      "name": "Aremberg",
+      "start": 3756.0
+    },
+    {
+      "name": "Fuchsröhre",
+      "start": 4094.0
+    },
+    {
+      "name": "Adenauer Forst",
+      "start": 4998.0
+    },
+    {
+      "name": "Metzgesfeld",
+      "start": 5456.0
+    },
+    {
+      "name": "Kallenhard",
+      "start": 6122.0
+    },
+    {
+      "name": "Spiegelkurve",
+      "start": 6668.0
+    },
+    {
+      "name": "Dreifach-Rechts",
+      "start": 6894.0
+    },
+    {
+      "name": "Wehrseifen",
+      "start": 7268.0
+    },
+    {
+      "name": "Breidscheid",
+      "start": 7594.0
+    },
+    {
+      "name": "Exmühle",
+      "start": 8066.0
+    },
+    {
+      "name": "Lauda-Links",
+      "start": 8594.0
+    },
+    {
+      "name": "Bergwerk",
+      "start": 8832.0
+    },
+    {
+      "name": "Senkenlinks",
+      "start": 9272.0
+    },
+    {
+      "name": "Kesselchen",
+      "start": 9996.0
+    },
+    {
+      "name": "Mutkurve",
+      "start": 10744.0
+    },
+    {
+      "name": "Klostertal",
+      "start": 11122.0
+    },
+    {
+      "name": "Steilstrecke",
+      "start": 11432.0
+    },
+    {
+      "name": "Karussell",
+      "start": 11938.0
+    },
+    {
+      "name": "Hohe Acht",
+      "start": 12092.0
+    },
+    {
+      "name": "Hedwigshöhe",
+      "start": 13268.0
+    },
+    {
+      "name": "Wippermann",
+      "start": 13376.0
+    },
+    {
+      "name": "Eschbach",
+      "start": 13698.0
+    },
+    {
+      "name": "Brünnchen",
+      "start": 14104.0
+    },
+    {
+      "name": "Eiskurve",
+      "start": 14624.0
+    },
+    {
+      "name": "Pflanzgarten",
+      "start": 14782.0
+    },
+    {
+      "name": "Sprunghügel",
+      "start": 15584.0
+    },
+    {
+      "name": "Stefan-Bellof-S",
+      "start": 15802.0
+    },
+    {
+      "name": "Schwalbenschwanz",
+      "start": 16350.0
+    },
+    {
+      "name": "Mini-Karussell",
+      "start": 16740.0
+    },
+    {
+      "name": "Galgenkopf",
+      "start": 17160.0
+    },
+    {
+      "name": "Döttinger Höhe",
+      "start": 17810.0
+    },
+    {
+      "name": "Antoniusbuche",
+      "start": 19322.0
+    },
+    {
+      "name": "Tiergarten",
+      "start": 20122.0
+    },
+    {
+      "name": "Hohenrain",
+      "start": 20252.0
+    }
+  ],
+  "heightNear": {
+    "file": "height_near.png",
+    "x0": -3743.586094986254,
+    "z0": -3124.4101851302084,
+    "res": 4.0,
+    "w": 1873,
+    "h": 1564,
+    "min": -9.381945610046387,
+    "max": 408.3251647949219
+  },
+  "heightFar": {
+    "file": "height_far.png",
+    "x0": -12000.0,
+    "z0": -12000.0,
+    "res": 48.0,
+    "w": 501,
+    "h": 501,
+    "min": -105.19929504394531,
+    "max": 400.15753173828125
+  },
+  "landcover": {
+    "file": "landcover.png"
+  },
+  "attribution": [
+    "Track layout, corner names and land cover (c) OpenStreetMap contributors, ODbL 1.0",
+    "Elevation: AWS Terrain Tiles (Mapzen terrarium), derived from SRTM/EU-DEM/GMTED"
+  ]
+}

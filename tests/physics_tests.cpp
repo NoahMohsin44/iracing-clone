@@ -1,0 +1,290 @@
+// Headless physics validation: runs the GT3 car through standard tests and an AI lap of the
+// Nordschleife, printing figures that can be compared with real GT3 data.
+//   apexsim_tests            run everything
+//   apexsim_tests quick      skip the full lap
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <vector>
+
+#include "car/Car.h"
+#include "core/Log.h"
+#include "core/Paths.h"
+#include "game/AIDriver.h"
+#include "game/LapTimer.h"
+#include "world/TrackData.h"
+
+using namespace apex;
+
+namespace {
+constexpr double kDt = 1.0 / 1000.0;
+int g_failures = 0;
+
+void check(bool ok, const char* what) {
+    printf("  [%s] %s\n", ok ? " OK " : "FAIL", what);
+    if (!ok) ++g_failures;
+}
+
+std::vector<glm::vec2> stadium(float straight, float radius, float spacing) {
+    std::vector<glm::vec2> pts;
+    auto addLine = [&](glm::vec2 a, glm::vec2 b) {
+        float len = glm::length(b - a);
+        int n = static_cast<int>(len / spacing);
+        for (int i = 0; i < n; ++i) pts.push_back(a + (b - a) * (i / static_cast<float>(n)));
+    };
+    auto addArc = [&](glm::vec2 c, float a0, float a1) {
+        float len = std::abs(a1 - a0) * radius;
+        int n = static_cast<int>(len / spacing);
+        for (int i = 0; i < n; ++i) {
+            float a = a0 + (a1 - a0) * (i / static_cast<float>(n));
+            pts.push_back(c + radius * glm::vec2(std::cos(a), std::sin(a)));
+        }
+    };
+    // drive north (-z) on x=0, right-hand semicircle around (radius, -straight), back south on x=2r
+    addLine({0, 0}, {0, -straight});
+    addArc({radius, -straight}, 3.14159265f, 2.0f * 3.14159265f);
+    addLine({2 * radius, -straight}, {2 * radius, 0});
+    addArc({radius, 0}, 0.0f, 3.14159265f);
+    return pts;
+}
+
+std::vector<glm::vec2> circle(float radius, float spacing) {
+    std::vector<glm::vec2> pts;
+    int n = static_cast<int>(2 * 3.14159265f * radius / spacing);
+    for (int i = 0; i < n; ++i) {
+        float a = 2.0f * 3.14159265f * i / n;  // clockwise seen from above = right-hand corner
+        pts.push_back(radius * glm::vec2(std::cos(a), std::sin(a)));
+    }
+    return pts;
+}
+
+void testStandstill(const TrackData& track) {
+    printf("\n== Standstill stability\n");
+    Car car;
+    car.init(CarParams::gt3(), &track);
+    car.resetTo(20.0f, 0.0f);
+    CarInput in;
+    double maxV = 0, settleY = 0;
+    for (int i = 0; i < 10000; ++i) {
+        car.step(kDt, in);
+        if (i > 3000) maxV = std::max(maxV, car.speed());
+    }
+    settleY = car.position().y;
+    printf("  max speed after settling: %.4f m/s, CG height %.3f m\n", maxV, settleY);
+    for (int i = 0; i < 4; ++i)
+        printf("  wheel %d load %.0f N travel %.1f mm\n", i, car.wheels()[i].load, car.wheels()[i].travel * 1000);
+    check(maxV < 0.02, "car sits still without creeping or oscillating");
+    check(std::abs(settleY - 0.43) < 0.03, "static CG height ~0.43 m");
+}
+
+void testAcceleration(const TrackData& track) {
+    printf("\n== Acceleration / top speed / braking (flat straight)\n");
+    Car car;
+    car.init(CarParams::gt3(), &track);
+    car.setAutoShift(true);
+    car.tcLevel = 3;
+    car.resetTo(5.0f, 0.0f);
+    AIDriver ai;
+    ai.init(&track);
+    double t = 0, t100 = -1, t200 = -1, t250 = -1, vmax = 0;
+    double brakeStart = -1, brakeDist = -1;
+    bool braking = false;
+    glm::dvec3 brakePos;
+    for (int i = 0; i < 120000; ++i) {
+        CarInput in = ai.update(car, kDt);
+        in.throttle = braking ? 0.0f : 1.0f;
+        in.brake = braking ? 1.0f : 0.0f;
+        car.step(kDt, in);
+        t += kDt;
+        double kmh = car.speed() * 3.6;
+        if (t100 < 0 && kmh >= 100) t100 = t;
+        if (t200 < 0 && kmh >= 200) t200 = t;
+        if (t250 < 0 && kmh >= 250) t250 = t;
+        vmax = std::max(vmax, kmh);
+        if (!braking && car.trackLocation().s > 4300.0f) {
+            braking = true;
+            brakeStart = kmh;
+            brakePos = car.position();
+        }
+        if (braking && car.speed() < 0.3) {
+            brakeDist = glm::length(car.position() - brakePos);
+            break;
+        }
+    }
+    printf("  0-100 km/h: %.2f s   0-200 km/h: %.2f s   0-250 km/h: %.2f s\n", t100, t200, t250);
+    printf("  top speed on 4.3 km straight: %.1f km/h\n", vmax);
+    printf("  braking from %.0f km/h to stop: %.1f m\n", brakeStart, brakeDist);
+    check(t100 > 2.6 && t100 < 4.2, "0-100 km/h in 2.6..4.2 s (GT3: ~3.3 s)");
+    check(t200 > 7.0 && t200 < 11.5, "0-200 km/h in 7..11.5 s (GT3: ~9 s)");
+    check(vmax > 255 && vmax < 295, "top speed 255..295 km/h");
+}
+
+void testBraking(const TrackData& track) {
+    printf("\n== Braking 200-0 km/h (ABS on/off)\n");
+    for (int abs = 1; abs >= 0; --abs) {
+        Car car;
+        car.init(CarParams::gt3(), &track);
+        car.setAutoShift(true);
+        car.absEnabled = abs != 0;
+        car.resetTo(5.0f, 0.0f);
+        AIDriver ai;
+        ai.init(&track);
+        bool braking = false;
+        glm::dvec3 p0;
+        double dist = -1;
+        double peakG = 0;
+        for (int i = 0; i < 60000; ++i) {
+            CarInput in = ai.update(car, kDt);
+            if (!braking && car.speed() * 3.6 >= 200.0) {
+                braking = true;
+                p0 = car.position();
+            }
+            in.throttle = braking ? 0.0f : 1.0f;
+            in.brake = braking ? 1.0f : 0.0f;
+            car.step(kDt, in);
+            if (braking) peakG = std::max(peakG, car.localAcceleration().z / 9.81);
+            if (braking && car.speed() < 0.3) {
+                dist = glm::length(car.position() - p0);
+                break;
+            }
+        }
+        printf("  ABS %s: 200-0 in %.1f m, peak decel %.2f g\n", abs ? "on " : "off", dist, peakG);
+        if (abs) check(dist > 75 && dist < 125, "200-0 km/h in 75..125 m with ABS (GT3: ~95 m)");
+    }
+}
+
+void testSkidpad(float radius, float startKmh) {
+    printf("\n== Skidpad R=%.0f m\n", radius);
+    TrackData track;
+    track.createSynthetic(circle(radius, 2.0f), 12.0f, 2.0f, 60.0f);
+    Car car;
+    car.init(CarParams::gt3(), &track);
+    car.setAutoShift(true);
+    car.resetTo(0.0f, 0.0f);
+    // simple line follower at constant radius with a slowly increasing speed target
+    double target = startKmh / 3.6;
+    double steerI = 0, best = 0, bestV = 0, accLat = 0;
+    int window = 0;
+    double drift = 0;
+    for (int i = 0; i < 240000; ++i) {
+        const auto& loc = car.trackLocation();
+        glm::dvec3 tangent(track.tangentAt(loc.s));
+        glm::dvec3 fwd = car.forward();
+        double headingErr = std::atan2(glm::dot(glm::cross(fwd, tangent), glm::dvec3(0, 1, 0)), glm::dot(fwd, tangent));
+        double ff = std::atan(car.params().wheelbase / radius);
+        steerI += -loc.lateral * 0.00002;
+        double steer = (ff - headingErr * 1.2 - loc.lateral * 0.05 + steerI) / car.params().front.maxSteer;
+        CarInput in;
+        in.steer = static_cast<float>(std::clamp(steer, -1.0, 1.0));
+        double err = target - car.forwardSpeed();
+        in.throttle = static_cast<float>(std::clamp(0.3 + err * 0.3, 0.0, 1.0));
+        car.step(kDt, in);
+        if (i > 15000) target += kDt * 0.25;
+        accLat += car.localAcceleration().x;
+        if (++window == 1000) {
+            double g = std::abs(accLat / window) / 9.81;
+            if (std::abs(loc.lateral) < 2.5 && g > best) {
+                best = g;
+                bestV = car.speed() * 3.6;
+            }
+            if (std::abs(loc.lateral) > 6.0) drift += 1;
+            accLat = 0;
+            window = 0;
+            if (drift > 3) break;
+        }
+    }
+    printf("  max steady lateral acceleration: %.2f g at %.0f km/h\n", best, bestV);
+}
+
+void testLap() {
+    printf("\n== AI lap of the Nordschleife\n");
+    TrackData track;
+    if (!track.load(paths::asset("tracks/nordschleife"))) {
+        check(false, "load Nordschleife");
+        return;
+    }
+    Car car;
+    car.init(CarParams::gt3(), &track);
+    car.setAutoShift(true);
+    car.resetTo(track.length() - 250.0f, track.racingLineAt(track.length() - 250.0f));
+    AIDriver ai;
+    ai.init(&track, 0.96f);
+    LapTimer timer;
+    timer.init(track.length());
+    double t = 0, maxLat = 0, maxV = 0;
+    int resets = 0, laps = 0;
+    double offTrack = 0;
+    int lastSection = -1;
+    for (long i = 0; i < 1000L * 60 * 20; ++i) {
+        CarInput in = ai.update(car, kDt);
+        car.step(kDt, in);
+        t += kDt;
+        timer.update(t, car.trackLocation().s);
+        maxLat = std::max(maxLat, std::abs(car.localAcceleration().x) / 9.81);
+        maxV = std::max(maxV, car.speed() * 3.6);
+        int wheelsOff = 0;
+        for (auto& w : car.wheels()) wheelsOff += (w.surface == Surface::Grass || w.surface == Surface::Dirt);
+        if (wheelsOff == 4) offTrack += kDt;
+        if (getenv("APEX_TRACE") && i % 100 == 0 && t > atof(getenv("APEX_TRACE")) && t < atof(getenv("APEX_TRACE")) + 4) {
+            const auto& L = car.trackLocation();
+            glm::dvec3 tg(track.tangentAt(L.s));
+            double yawErr = std::atan2(glm::dot(glm::cross(car.forward(), tg), glm::dvec3(0, 1, 0)), glm::dot(car.forward(), tg));
+            glm::dvec3 vl = glm::transpose(car.rotation()) * car.velocity();
+            printf("    t=%.2f s=%.0f lat=%.2f v=%.0f g=%d rpm=%.0f st=%.2f th=%.2f br=%.2f hint=%.0f line=%.2f hdg=%.1f beta=%.1f yaw=%.2f ax=%.2f ay=%.2f sx=%.2f/%.2f/%.2f/%.2f sy=%.2f/%.2f/%.2f/%.2f fz=%.0f/%.0f/%.0f/%.0f\n", t, L.s, L.lateral,
+                   car.speed() * 3.6, car.drivetrain().gear(), car.drivetrain().rpm(), in.steer, in.throttle, in.brake,
+                   track.speedHintAt(L.s) * 3.6, track.racingLineAt(L.s), yawErr * 57.3, std::atan2(vl.x, -vl.z) * 57.3,
+                   -glm::dot(car.angularVelocity(), car.up()), car.localAcceleration().x / 9.81, car.localAcceleration().z / 9.81,
+                   car.wheels()[0].slipX, car.wheels()[1].slipX, car.wheels()[2].slipX, car.wheels()[3].slipX,
+                   car.wheels()[0].slipY, car.wheels()[1].slipY, car.wheels()[2].slipY, car.wheels()[3].slipY,
+                   car.wheels()[0].load, car.wheels()[1].load, car.wheels()[2].load, car.wheels()[3].load);
+        }
+        if (timer.timing() && i % 1000 == 0) {
+            int sec = track.sectionIndex(car.trackLocation().s);
+            if (sec != lastSection && laps == 0) {
+                lastSection = sec;
+                printf("    %7.1fs  %-26s %5.0f km/h  gear %d\n", timer.currentLap(t), track.sectionName(car.trackLocation().s),
+                       car.speed() * 3.6, car.drivetrain().gear());
+            }
+        }
+        static double stuckTime = 0;
+        glm::dvec3 tan(track.tangentAt(car.trackLocation().s));
+        bool wrongWay = glm::dot(car.forward(), tan) < 0.2;
+        stuckTime = (car.speed() < 2.0 || wrongWay) ? stuckTime + kDt : 0.0;
+        if (car.needsReset() || stuckTime > 3.0) {
+            stuckTime = 0;
+            ++resets;
+            printf("  reset at s=%.0f (%s) speed %.0f km/h\n", car.trackLocation().s,
+                   track.sectionName(car.trackLocation().s), car.speed() * 3.6);
+            float s = car.trackLocation().s;
+            car.resetTo(s, track.racingLineAt(s));
+        }
+        if (timer.laps() > laps) {
+            laps = timer.laps();
+            printf("  lap %d: %s\n", laps, LapTimer::format(timer.lastLap()).c_str());
+            if (laps >= 1) break;
+        }
+    }
+    printf("  max lateral %.2f g, max speed %.0f km/h, %.1f s with all wheels off, %d resets\n", maxLat, maxV,
+           offTrack, resets);
+    check(laps >= 1, "AI completes a lap");
+    check(resets == 0, "AI lap without leaving the circuit");
+    if (laps >= 1) check(timer.lastLap() > 380 && timer.lastLap() < 520, "lap time 6:20..8:40 (GT3 ~7:00)");
+}
+}  // namespace
+
+int main(int argc, char** argv) {
+    paths::init();
+    bool quick = argc > 1 && strcmp(argv[1], "quick") == 0;
+    TrackData straight;
+    straight.createSynthetic(stadium(5000.0f, 300.0f, 2.0f), 8.0f, 2.0f, 40.0f);
+    testStandstill(straight);
+    testAcceleration(straight);
+    testBraking(straight);
+    testSkidpad(80.0f, 60.0f);
+    testSkidpad(300.0f, 130.0f);
+    if (!quick) testLap();
+    printf("\n%s (%d failures)\n", g_failures ? "SOME TESTS FAILED" : "ALL TESTS PASSED", g_failures);
+    return g_failures ? 1 : 0;
+}
