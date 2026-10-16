@@ -61,6 +61,7 @@ add_library(imgui STATIC
   ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp)
 target_include_directories(imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
 target_link_libraries(imgui PUBLIC glfw)
+target_compile_definitions(imgui PUBLIC GLFW_INCLUDE_NONE)
 
 # ---------------------------------------------------------------- vendored: glad + stb
 add_library(apex_thirdparty STATIC
@@ -100,6 +101,7 @@ add_library(apex_sim STATIC
   src/core/Paths.cpp
   src/core/Settings.cpp
   src/core/Noise.cpp
+  src/core/Json.cpp
   src/world/TrackData.cpp
   src/car/Tire.cpp
   src/car/Drivetrain.cpp
@@ -140,6 +142,7 @@ add_executable(apexsim
   src/ui/SettingsMenu.cpp
   src/ui/Hud.cpp)
 target_link_libraries(apexsim PRIVATE apex_sim imgui glfw)
+target_compile_definitions(apexsim PRIVATE GLFW_INCLUDE_NONE)
 apex_target_settings(apexsim)
 
 if(WIN32)

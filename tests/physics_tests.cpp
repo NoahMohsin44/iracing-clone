@@ -5,10 +5,12 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
 
+#include "audio/CarAudio.h"
 #include "car/Car.h"
 #include "core/Log.h"
 #include "core/Paths.h"
@@ -274,8 +276,95 @@ void testLap() {
 }
 }  // namespace
 
+void writeWav(const char* path, const std::vector<float>& stereo, int sr) {
+    FILE* f = fopen(path, "wb");
+    if (!f) return;
+    auto u32 = [&](uint32_t v) { fwrite(&v, 4, 1, f); };
+    auto u16 = [&](uint16_t v) { fwrite(&v, 2, 1, f); };
+    uint32_t bytes = static_cast<uint32_t>(stereo.size() * 2);
+    fwrite("RIFF", 1, 4, f);
+    u32(36 + bytes);
+    fwrite("WAVEfmt ", 1, 8, f);
+    u32(16);
+    u16(1);
+    u16(2);
+    u32(sr);
+    u32(sr * 4);
+    u16(4);
+    u16(16);
+    fwrite("data", 1, 4, f);
+    u32(bytes);
+    for (float v : stereo) {
+        int16_t s = static_cast<int16_t>(std::clamp(v, -1.0f, 1.0f) * 32767.0f);
+        fwrite(&s, 2, 1, f);
+    }
+    fclose(f);
+}
+
+// Drives a scripted sequence (idle, blips, full-throttle run, ABS-off braking, slalom) and renders
+// the car audio to a WAV file so the synthesis can be checked without running the game.
+void renderAudioPreview(const char* path, float interior) {
+    TrackData track;
+    track.createSynthetic(stadium(5000.0f, 300.0f, 2.0f), 8.0f, 2.0f, 40.0f);
+    Car car;
+    car.init(CarParams::gt3(), &track);
+    car.setAutoShift(true);
+    car.resetTo(5.0f, 0.0f);
+    AIDriver ai;
+    ai.init(&track);
+    const int sr = 48000;
+    CarAudio audio;
+    audio.init(static_cast<float>(sr));
+    CarAudioParams params;
+    params.interior = interior;
+    std::vector<float> wav;
+    std::vector<float> block(480 * 2);
+    const double total = 34.0;
+    for (double t = 0; t < total; t += 0.01) {
+        for (int k = 0; k < 10; ++k) {
+            CarInput in = ai.update(car, kDt);
+            double tt = t + k * kDt;
+            if (tt < 3.0) {
+                in.throttle = 0.0f;
+            } else if (tt < 6.0) {
+                double ph = std::fmod(tt - 3.0, 1.0);
+                in.throttle = ph < 0.35 ? 1.0f : 0.0f;  // blips in neutral
+            } else if (tt < 21.0) {
+                in.throttle = 1.0f;
+            } else if (tt < 25.5) {
+                in.throttle = 0.0f;
+                in.brake = car.speed() > 3 ? 1.0f : 0.0f;
+                car.absEnabled = false;
+            } else {
+                car.absEnabled = true;
+                in.throttle = 0.75f;
+                in.steer += static_cast<float>(0.45 * std::sin((tt - 25.5) * 3.2));
+            }
+            if (tt < 6.0) car.drivetrain().setAutoShift(false);
+            else car.drivetrain().setAutoShift(true);
+            car.step(kDt, in);
+        }
+        fillCarAudioParams(car, params);
+        audio.setParams(params);
+        audio.render(block.data(), 480);
+        wav.insert(wav.end(), block.begin(), block.end());
+    }
+    writeWav(path, wav, sr);
+    float peak = 0;
+    double rms = 0;
+    for (float v : wav) {
+        peak = std::max(peak, std::abs(v));
+        rms += v * v;
+    }
+    printf("wrote %s (%.1f s, peak %.2f, rms %.3f)\n", path, wav.size() / 2.0 / sr, peak, std::sqrt(rms / wav.size()));
+}
+
 int main(int argc, char** argv) {
     paths::init();
+    if (argc > 2 && strcmp(argv[1], "audio") == 0) {
+        renderAudioPreview(argv[2], argc > 3 ? static_cast<float>(atof(argv[3])) : 0.0f);
+        return 0;
+    }
     bool quick = argc > 1 && strcmp(argv[1], "quick") == 0;
     TrackData straight;
     straight.createSynthetic(stadium(5000.0f, 300.0f, 2.0f), 8.0f, 2.0f, 40.0f);

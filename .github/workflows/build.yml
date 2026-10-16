@@ -1,0 +1,42 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure (MSVC x64)
+        run: cmake -S . -B build -A x64
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Physics tests
+        run: build/Release/apexsim_tests.exe quick
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/ApexSim | Out-Null
+          Copy-Item build/Release/apexsim.exe dist/ApexSim/
+          Copy-Item -Recurse build/Release/assets dist/ApexSim/assets
+          Copy-Item README.md dist/ApexSim/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ApexSim-windows-x64
+          path: dist/ApexSim
+
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build
+      - name: Physics tests (incl. AI lap of the Nordschleife)
+        run: ./build/apexsim_tests
