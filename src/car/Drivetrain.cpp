@@ -144,11 +144,22 @@ void Drivetrain::step(double dt, double throttle, double clutchPedal, WheelSide&
     const double Ie = p_.engine.inertia;
     const double Iw = 0.5 * (left.inertia + right.inertia);
 
+    // Torque on each driven wheel from outside the drivetrain: the tyre and the brake. The brake must
+    // be in here: with the clutch closed the engine's inertia (x ratio^2: ~6x the wheels' in 2nd
+    // gear) resists the brakes slowing the wheels. Left out, the clutch would read the tyre's
+    // braking force as a torque spinning the wheels up and hold them back against it, multiplying
+    // the rear brakes several times over in the low gears.
+    auto external = [dt](const WheelSide& w) {
+        const double tb = std::min(w.brakeTorque, std::abs(w.omega) * w.inertia / dt);
+        return w.externalTorque - std::copysign(tb, w.omega);
+    };
+    const double extLeft = external(left), extRight = external(right);
+
     double tc = 0.0;
     clutchLocked_ = false;
     if (G != 0.0 && capacity > 1e-3) {
         double omegaD = G * wheelAvg;
-        double extAvg = 0.5 * (left.externalTorque + right.externalTorque);
+        double extAvg = 0.5 * (extLeft + extRight);
         double num = (omegaEngine_ - omegaD) + dt * (tEngine / Ie - G * extAvg / Iw);
         double den = dt * (1.0 / Ie + G * G * eff / (2.0 * Iw));
         tc = num / den;
@@ -166,7 +177,7 @@ void Drivetrain::step(double dt, double throttle, double clutchPedal, WheelSide&
     const double tin = tc * G * eff;
     const double cap = p_.diff.preload + (tin >= 0.0 ? p_.diff.powerRamp : p_.diff.coastRamp) * std::abs(tin);
     double num = (right.omega - left.omega) +
-                 dt * ((right.externalTorque + 0.5 * tin) / right.inertia - (left.externalTorque + 0.5 * tin) / left.inertia);
+                 dt * ((extRight + 0.5 * tin) / right.inertia - (extLeft + 0.5 * tin) / left.inertia);
     double den = dt * (1.0 / left.inertia + 1.0 / right.inertia);
     double bias = std::clamp(num / den, -cap, cap);
     torqueLeft = 0.5 * tin + bias;

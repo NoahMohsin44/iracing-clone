@@ -12,6 +12,7 @@ public:
         double omega = 0.0;        // wheel angular velocity (rad/s)
         double inertia = 1.0;      // wheel inertia
         double externalTorque = 0; // predicted torque from tyre/rolling (excluding brakes)
+        double brakeTorque = 0;    // brake torque magnitude this step (opposes the rotation)
     };
 
     void init(const CarParams& p);

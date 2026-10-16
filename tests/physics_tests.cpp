@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <map>
+#include <string>
 #include <vector>
 
 #include "audio/CarAudio.h"
@@ -532,7 +534,357 @@ void traceBrakeInTurn(double brake, bool abs, bool autoShift) {
     }
 }
 
+// Light braking with a small steering input from speed: spin or not? (driver holds both)
+struct BrakeSteer {
+    double betaMax = 0, endKmh = 0;
+    bool spun = false, offRoad = false;
+};
+// followRoad: the steering offset is added to a driver that follows the road (on a real track a
+// frozen wheel would just drive off it); otherwise both inputs are held fixed.
+BrakeSteer brakeSteer(const TrackData& track, float s0, double kmh, double brake, double steer, float bias, bool autoShift,
+                      bool trace = false, bool followRoad = false) {
+    Car car;
+    car.init(CarParams::gt3(), &track);
+    car.setAutoShift(true);
+    car.brakeBias = bias;
+    car.resetTo(s0, track.racingLineAt(s0));
+    AIDriver ai;
+    ai.init(&track, 0.96f);
+    for (int i = 0; i < 120000 && car.speed() < kmh / 3.6; ++i) {
+        CarInput in = ai.update(car, kDt);
+        in.throttle = 1.0f;
+        in.brake = 0.0f;
+        car.step(kDt, in);
+    }
+    car.setAutoShift(autoShift);
+    CarInput hold = ai.update(car, kDt);
+    BrakeSteer r;
+    for (int i = 0; i < 4000 && car.speed() > 50.0 / 3.6; ++i) {
+        CarInput in = followRoad ? ai.update(car, kDt) : hold;
+        in.throttle = 0.0f;
+        in.brake = static_cast<float>(brake);
+        in.steer = static_cast<float>(std::clamp(in.steer + steer, -1.0, 1.0));
+        car.step(kDt, in);
+        for (const auto& w : car.wheels())
+            if (w.surface != Surface::Asphalt && w.surface != Surface::Kerb) r.offRoad = true;
+        State st = probe(car);
+        r.betaMax = std::max(r.betaMax, std::abs(st.beta));
+        if (std::abs(st.beta) > 20.0) r.spun = true;
+        if (trace && i % 100 == 0) {
+            const auto& w = car.wheels();
+            printf("     s=%.0f lat %+.1f surf %d%d%d%d ", car.trackLocation().s, car.trackLocation().lateral, (int)w[0].surface,
+                   (int)w[1].surface, (int)w[2].surface, (int)w[3].surface);
+            printf("t=%.1f %3.0f km/h gear %d beta %+5.1f yaw %+6.1f ay %+.2f ax %+.2f | slipX %+.2f %+.2f %+.2f %+.2f | "
+                   "slipY F %+.3f R %+.3f | Fz %4.0f %4.0f %4.0f %4.0f | abs %.2f %.2f\n",
+                   i * kDt, car.speed() * 3.6, car.drivetrain().gear(), st.beta, st.yaw, st.ay,
+                   car.localAcceleration().z / 9.81, w[0].slipX, w[1].slipX, w[2].slipX, w[3].slipX,
+                   0.5 * (w[0].slipY + w[1].slipY), 0.5 * (w[2].slipY + w[3].slipY), w[0].load, w[1].load, w[2].load,
+                   w[3].load, w[0].absFactor, w[2].absFactor);
+        }
+        if (r.spun && !trace) break;
+    }
+    r.endKmh = car.speed() * 3.6;
+    return r;
+}
+
+// The brake balance the driver sets must hold in every gear: with the clutch closed the engine is
+// geared to the rear wheels, and only its drag (engine braking) may add to the rear brakes.
+struct Balance {
+    double frontShare = 0, decelG = 0, rearSlip = 0;
+};
+Balance brakeBalance(int gear, double kmh, double brake, float bias) {
+    TrackData flat;
+    flat.createSynthetic(stadium(5000.0f, 300.0f, 2.0f), 40.0f, 2.0f, 80.0f);
+    Car car;
+    car.init(CarParams::gt3(), &flat);
+    car.setAutoShift(true);
+    car.brakeBias = bias;
+    car.resetTo(5.0f, flat.racingLineAt(5.0f));
+    AIDriver ai;
+    ai.init(&flat, 0.96f);
+    for (int i = 0; i < 60000 && car.speed() < kmh / 3.6; ++i) {
+        CarInput in = ai.update(car, kDt);
+        in.throttle = 1.0f;
+        in.brake = 0.0f;
+        car.step(kDt, in);
+        if (std::getenv("APEX_TRACE_BAL") && i % 250 == 0)
+            printf("    run-up t=%.2f %3.0f km/h gear %d lat %+.1f s %.0f steer %+.3f surf %d\n", i * kDt, car.speed() * 3.6,
+                   car.drivetrain().gear(), car.trackLocation().lateral, car.trackLocation().s, in.steer, (int)car.wheels()[0].surface);
+    }
+    car.setAutoShift(false);
+    for (int i = 0; i < 2000 && (car.drivetrain().gear() != gear || car.drivetrain().shifting()); ++i) {
+        CarInput in = ai.update(car, kDt);
+        in.throttle = 0.0f;
+        in.brake = 0.0f;
+        in.shiftDown = i % 150 == 0 && car.drivetrain().gear() > gear;
+        in.shiftUp = i % 150 == 0 && car.drivetrain().gear() < gear;
+        car.step(kDt, in);
+    }
+    for (int i = 0; i < 1500; ++i) {  // settle at speed in the new gear
+        CarInput in = ai.update(car, kDt);
+        in.brake = 0.0f;
+        in.throttle = static_cast<float>(std::clamp(0.3 + (kmh / 3.6 - car.forwardSpeed()) * 0.3, 0.0, 1.0));
+        car.step(kDt, in);
+    }
+    Balance b;
+    double front = 0, total = 0;
+    int n = 0;
+    for (int i = 0; i < 600; ++i) {
+        CarInput in = ai.update(car, kDt);
+        in.throttle = 0.0f;
+        in.brake = static_cast<float>(brake);
+        car.step(kDt, in);
+        const auto& w = car.wheels();
+        if (std::getenv("APEX_TRACE_BAL") && i % 20 == 0)
+            printf("    t=%.2f gear %d rpm %4.0f %3.0f km/h slip F %+.3f R %+.3f %+.3f fx F %5.0f R %5.0f drive %+5.0f abs %.2f Fz %4.0f %4.0f %4.0f %4.0f surf %d%d%d%d lat %+.1f s %.0f\n",
+                   i * kDt, car.drivetrain().gear(), car.drivetrain().rpm(), car.speed() * 3.6, w[0].slipX, w[2].slipX,
+                   w[3].slipX, w[0].fx + w[1].fx, w[2].fx + w[3].fx, w[2].driveTorque + w[3].driveTorque, w[2].absFactor,
+                   w[0].load, w[1].load, w[2].load, w[3].load, (int)w[0].surface, (int)w[1].surface, (int)w[2].surface,
+                   (int)w[3].surface, car.trackLocation().lateral, car.trackLocation().s);
+        if (i < 150) continue;  // let the pitch and the slip settle
+        front += w[0].fx + w[1].fx;
+        total += w[0].fx + w[1].fx + w[2].fx + w[3].fx;
+        b.decelG += car.localAcceleration().z / 9.81;
+        b.rearSlip = std::min(b.rearSlip, std::min(w[2].slipX, w[3].slipX));
+        ++n;
+    }
+    b.frontShare = front / total;
+    b.decelG /= n;
+    return b;
+}
+
+void brakeBalanceByGear() {
+    printf("\n== Handling: brake balance with the clutch closed (30%% pedal, bias 70%% front, 110 km/h)\n");
+    Balance b2 = brakeBalance(2, 110.0, 0.3, 0.70f), b4 = brakeBalance(4, 110.0, 0.3, 0.70f);
+    for (auto [g, b] : {std::pair{2, b2}, std::pair{4, b4}})
+        printf("  gear %d: front share of the braking force %.0f%%, decel %.2f g, rear slip %+.3f\n", g, b.frontShare * 100,
+               b.decelG, b.rearSlip);
+    check(b2.frontShare > 0.58 && b4.frontShare > 0.58, "the set brake bias holds in low gears (engine braking adds a little rear)");
+    check(std::abs(b2.decelG - b4.decelG) < 0.12, "the same pedal gives about the same deceleration in 2nd and 4th");
+    check(b2.rearSlip > -0.03, "light braking in 2nd keeps the rear tyres well inside their grip");
+}
+
+// On the real track: the AI drives a run-up at its own pace, then at sTrigger the driver lifts,
+// brakes lightly and adds a small steering offset to the AI's road-following steering.
+BrakeSteer brakeSteerOnTrack(const TrackData& track, float sTrigger, double brake, double steer, float bias) {
+    Car car;
+    car.init(CarParams::gt3(), &track);
+    car.setAutoShift(true);
+    car.brakeBias = bias;
+    const float runUp = 1500.0f;
+    float s0 = sTrigger - runUp;
+    if (s0 < 0.0f) s0 += track.length();
+    car.resetTo(s0, track.racingLineAt(s0));
+    AIDriver ai;
+    ai.init(&track, 0.96f);
+    double sPrev = s0, dist = 0;
+    for (int i = 0; i < 120000 && dist < runUp; ++i) {
+        car.step(kDt, ai.update(car, kDt));
+        double ds = car.trackLocation().s - sPrev;
+        if (ds < -track.length() / 2) ds += track.length();
+        dist += ds;
+        sPrev = car.trackLocation().s;
+    }
+    BrakeSteer r;
+    r.endKmh = car.speed() * 3.6;  // speed at the trigger
+    for (int i = 0; i < 3000 && car.speed() > 50.0 / 3.6; ++i) {
+        CarInput in = ai.update(car, kDt);
+        in.throttle = 0.0f;
+        in.brake = static_cast<float>(brake);
+        in.steer = static_cast<float>(std::clamp(in.steer + steer, -1.0, 1.0));
+        car.step(kDt, in);
+        for (const auto& w : car.wheels())
+            if (w.surface != Surface::Asphalt && w.surface != Surface::Kerb) r.offRoad = true;
+        r.betaMax = std::max(r.betaMax, std::abs(probe(car).beta));
+        if (r.betaMax > 20.0) {
+            r.spun = true;
+            break;
+        }
+    }
+    return r;
+}
+
+void brakeSteerGrid(bool withChecks) {
+    printf("\n== Handling: light braking + a small steering input from speed\n");
+    TrackData flat;
+    flat.createSynthetic(stadium(5000.0f, 300.0f, 2.0f), 40.0f, 2.0f, 80.0f);
+    int spins = 0, runs = 0;
+    printf("  flat straight, driver holds both inputs:\n");
+    for (double kmh : {150.0, 220.0}) {
+        for (double brake : {0.1, 0.25}) {
+            for (double steer : {0.01, 0.03, 0.06}) {
+                for (float bias : {0.575f, 0.70f}) {
+                    BrakeSteer r = brakeSteer(flat, 5.0f, kmh, brake, steer, bias, true);
+                    ++runs;
+                    if (r.spun) ++spins;
+                    if (r.spun || !withChecks)
+                        printf("    %3.0f km/h brake %2.0f%% steer %+.2f bias %2.0f%%: max sideslip %5.1f deg%s\n", kmh,
+                               brake * 100, steer, bias * 100, r.betaMax, r.spun ? "  -> SPIN" : "");
+                }
+            }
+        }
+    }
+    TrackData nords;
+    const char* dir = std::getenv("APEX_TRACK_DIR");
+    if (nords.load(dir ? std::string(dir) : paths::asset("tracks/nordschleife"))) {
+        // fast, open parts of the lap
+        std::vector<float> triggers;
+        for (float s = 0.0f; s < nords.length() && triggers.size() < (withChecks ? 3u : 6u); s += 50.0f) {
+            bool fast = true;
+            for (float d = 0.0f; d <= 200.0f && fast; d += 10.0f)
+                fast = nords.speedHintAt(std::fmod(s + d, nords.length())) > 50.0f;
+            if (fast && (triggers.empty() || s - triggers.back() > 2500.0f)) triggers.push_back(s);
+        }
+        printf("  Nordschleife (laser-scanned), lift + brake + steering offset while following the road:\n");
+        for (float sTrig : triggers) {
+            for (double brake : {0.1, 0.25}) {
+                for (double steer : {-0.03, -0.01, 0.01, 0.03}) {
+                    for (float bias : {0.575f, 0.70f}) {
+                        BrakeSteer r = brakeSteerOnTrack(nords, sTrig, brake, steer, bias);
+                        ++runs;
+                        if (r.spun) ++spins;
+                        if (r.spun || !withChecks)
+                            printf("    %-22s %3.0f km/h brake %2.0f%% steer %+.2f bias %2.0f%%: max sideslip %5.1f deg%s%s\n",
+                                   nords.sectionName(sTrig), r.endKmh, brake * 100, steer, bias * 100, r.betaMax,
+                                   r.offRoad ? " (off road)" : "", r.spun ? "  -> SPIN" : "");
+                    }
+                }
+            }
+        }
+    }
+    printf("  %d of %d combinations spun\n", spins, runs);
+    if (withChecks) check(spins == 0, "light braking with a small steering input never spins the car");
+}
+
+// How rough is the road? Drive a lap with the AI and log near-unloaded tyres on tarmac.
+void roughness() {
+    TrackData nords;
+    const char* dir = std::getenv("APEX_TRACK_DIR");
+    nords.load(dir ? std::string(dir) : paths::asset("tracks/nordschleife"));
+    Car car;
+    car.init(CarParams::gt3(), &nords);
+    car.setAutoShift(true);
+    car.resetTo(nords.length() - 250.0f, nords.racingLineAt(nords.length() - 250.0f));
+    AIDriver ai;
+    ai.init(&nords, 0.96f);
+    std::map<std::string, std::pair<int, int>> bySection;  // unloaded samples, samples
+    const char* detail = std::getenv("APEX_ROUGH_SECTION");
+    double fzVarSum = 0, fzLow[4] = {3500, 3500, 3500, 3500};
+    long n = 0;
+    double sPrev = car.trackLocation().s, dist = 0;
+    for (long i = 0; i < 1000L * 60 * 9 && dist < nords.length(); ++i) {
+        CarInput in = ai.update(car, kDt);
+        car.step(kDt, in);
+        double s = car.trackLocation().s;
+        double ds = s - sPrev;
+        if (ds < -nords.length() / 2) ds += nords.length();
+        dist += ds;
+        sPrev = s;
+        if (car.speed() < 25.0) continue;
+        bool tarmac = true;
+        int unloaded = 0;
+        for (const auto& w : car.wheels()) {
+            if (w.surface != Surface::Asphalt) tarmac = false;
+            if (w.load < 400.0) ++unloaded;
+        }
+        if (!tarmac) continue;
+        auto& e = bySection[nords.sectionName(static_cast<float>(s))];
+        e.second++;
+        if (unloaded) e.first++;
+        if (unloaded && detail && std::string(nords.sectionName(static_cast<float>(s))) == detail) {
+            const auto& w = car.wheels();
+            printf("    s %7.1f lat %+5.2f %5.1f km/h  ay %+5.2f g  brake %.2f  Fz %5.0f %5.0f %5.0f %5.0f\n", s, car.trackLocation().lateral, car.speed() * 3.6,
+                   car.localAcceleration().x / 9.81, in.brake, w[0].load, w[1].load, w[2].load, w[3].load);
+        }
+        // bump content: each tyre's load against its own 0.3 s average (removes weight transfer)
+        for (int k = 0; k < 4; ++k) {
+            const double fz = car.wheels()[k].load;
+            fzLow[k] += (fz - fzLow[k]) * (kDt / 0.3);
+            fzVarSum += (fz - fzLow[k]) * (fz - fzLow[k]) * 0.25;
+        }
+        ++n;
+    }
+    int tot = 0, un = 0;
+    std::vector<std::pair<double, std::string>> worst;
+    for (auto& [name, e] : bySection) {
+        tot += e.second;
+        un += e.first;
+        worst.push_back({e.first / std::max(1.0, double(e.second)), name});
+    }
+    std::sort(worst.rbegin(), worst.rend());
+    printf("  tyre nearly unloaded (< 400 N) on tarmac: %.2f%% of the lap; tyre load variation (bumps) %.0f N rms\n",
+           100.0 * un / std::max(1, tot), std::sqrt(fzVarSum / std::max(1L, n)));
+    for (int k = 0; k < 6 && k < (int)worst.size(); ++k) printf("    %-24s %.2f%%\n", worst[k].second.c_str(), worst[k].first * 100);
+}
+
 void run() {
+    if (std::getenv("APEX_ROUGH")) {
+        roughness();
+        return;
+    }
+    if (std::getenv("APEX_TRACE_BS")) {
+        TrackData nords;
+        nords.load(paths::asset("tracks/nordschleife"));
+        double kmh = atof(std::getenv("APEX_TRACE_BS"));
+        brakeSteer(nords, 17100.0f, kmh, 0.1, 0.03, 0.70f, true, true);
+        return;
+    }
+    if (std::getenv("APEX_TRACE_DOWNSHIFT")) {
+        // light braking from speed on a flat straight: rear slip around each automatic downshift
+        TrackData flat;
+        flat.createSynthetic(stadium(5000.0f, 300.0f, 2.0f), 40.0f, 2.0f, 80.0f);
+        for (double brake : {0.0, 0.1, 0.3}) {
+            Car car;
+            car.init(CarParams::gt3(), &flat);
+            car.setAutoShift(true);
+            car.brakeBias = 0.70f;
+            car.resetTo(5.0f, flat.racingLineAt(5.0f));
+            AIDriver ai;
+            ai.init(&flat, 0.96f);
+            for (int i = 0; i < 60000 && car.speed() < 230.0 / 3.6; ++i) {
+                CarInput in = ai.update(car, kDt);
+                in.throttle = 1.0f;
+                in.brake = 0.0f;
+                car.step(kDt, in);
+            }
+            CarInput hold = ai.update(car, kDt);
+            printf("  brake %.0f%%:\n", brake * 100);
+            int gear = car.drivetrain().gear(), since = -1;
+            double worst = 0, rpmBefore = 0;
+            for (int i = 0; i < 12000 && car.speed() > 40.0 / 3.6; ++i) {
+                CarInput in = hold;
+                in.throttle = 0.0f;
+                in.brake = static_cast<float>(brake);
+                const double rpm = car.drivetrain().rpm();
+                car.step(kDt, in);
+                const auto& w = car.wheels();
+                if (car.drivetrain().gear() != gear) {
+                    if (since >= 0) printf("    -> worst rear slip %+.3f\n", worst);
+                    printf("    %d->%d at %3.0f km/h, %4.0f rpm before", gear, car.drivetrain().gear(), car.speed() * 3.6, rpmBefore);
+                    gear = car.drivetrain().gear();
+                    since = 0;
+                    worst = 0;
+                }
+                if (std::getenv("APEX_TRACE_DOWNSHIFT")[0] == '2' && brake > 0.2 && i % 10 == 0) {
+                    const double matched = std::abs(0.5 * (w[2].omega + w[3].omega)) * car.drivetrain().totalRatio(car.drivetrain().gear()) * 60.0 / 6.2832;
+                    printf("      t=%.2f gear %d rpm %4.0f matched %4.0f slip %+.3f %+.3f abs %.2f eng %+5.0f Nm locked %d Fz %4.0f %4.0f | RL fx %+5.0f brakeT %4.0f driveT %+5.0f | FL fx %+5.0f slip %+.3f | ax %.2f g\n", i * kDt,
+                           car.drivetrain().gear(), car.drivetrain().rpm(), matched, w[2].slipX, w[3].slipX, w[2].absFactor,
+                           car.drivetrain().engineTorque(), (int)car.drivetrain().clutchLocked(), w[2].load, w[3].load, w[2].fx, w[2].brakeTorque, w[2].driveTorque, w[0].fx, w[0].slipX, car.localAcceleration().z / 9.81);
+                }
+                if (since >= 0 && since < 300) {
+                    worst = std::min(worst, std::min(w[2].slipX, w[3].slipX));
+                    if (++since == 300) printf(", %4.0f rpm after -> worst rear slip in 0.3 s %+.3f\n", car.drivetrain().rpm(), worst);
+                }
+                rpmBefore = rpm;
+            }
+            if (since >= 0 && since < 300) printf("\n");
+        }
+        return;
+    }
+    if (std::getenv("APEX_BS_GRID")) {
+        brakeSteerGrid(false);
+        return;
+    }
     if (std::getenv("APEX_TRACE_BRAKE")) {
         traceBrakeInTurn(0.3, true, true);
         traceBrakeInTurn(0.3, true, false);
@@ -554,6 +906,8 @@ void run() {
                r.yawRatio, r.spun ? "  -> SPIN" : "");
         check(!r.spun && std::abs(r.betaAt1s) < 5.0, "braking in a corner (ABS) rotates the car but does not spin it");
     }
+    brakeBalanceByGear();
+    brakeSteerGrid(true);
     printf("\n== Handling: full throttle out of a 2nd-gear corner, R=40 m at 0.9 g, steering held\n");
     for (int tc : {0, 1, 3, 6}) {
         Result r = circleEvent(40.0, 0.9, tc, [](CarInput& e, double t) { e.throttle = static_cast<float>(std::min(1.0, t / 0.15)); });

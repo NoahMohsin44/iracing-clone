@@ -356,9 +356,14 @@ void Car::step(double dt, const CarInput& in) {
     tcActive_ = tcFactor_ < 0.97;
     drivetrain_.tcFactor = tcFactor_;
 
+    for (Wheel& w : wheels_) {
+        const double share = w.axle == 0 ? brakeBias : 1.0 - brakeBias;
+        w.brakeTorque = brake_ * p_.maxBrakeTorque * share * 0.5 * w.absFactor;
+    }
+
     // ------------------------------------------------------------------ drivetrain
-    Drivetrain::WheelSide dl{wheels_[2].omega, p_.rear.tire.inertia, sc[2].extTorque};
-    Drivetrain::WheelSide dr{wheels_[3].omega, p_.rear.tire.inertia, sc[3].extTorque};
+    Drivetrain::WheelSide dl{wheels_[2].omega, p_.rear.tire.inertia, sc[2].extTorque, wheels_[2].brakeTorque};
+    Drivetrain::WheelSide dr{wheels_[3].omega, p_.rear.tire.inertia, sc[3].extTorque, wheels_[3].brakeTorque};
     double tqL = 0.0, tqR = 0.0;
     drivetrain_.step(dt, throttle_, clutch_, dl, dr, tqL, tqR);
     wheels_[2].driveTorque = tqL;
@@ -374,8 +379,6 @@ void Car::step(double dt, const CarInput& in) {
         const double c = s.cDamp;
         const double denom = I + dt * c * s.radius * s.radius;
         double omegaFree = (I * w.omega + dt * (w.driveTorque + s.extTorque + c * s.radius * s.vLong)) / denom;
-        const double share = w.axle == 0 ? brakeBias : 1.0 - brakeBias;
-        w.brakeTorque = brake_ * p_.maxBrakeTorque * share * 0.5 * w.absFactor;
         const double dBrake = dt * w.brakeTorque / denom;
         if (std::abs(omegaFree) <= dBrake) w.omega = 0.0;
         else w.omega = omegaFree - std::copysign(dBrake, omegaFree);

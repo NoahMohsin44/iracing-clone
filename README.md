@@ -24,6 +24,10 @@ real GPU, use 4–8× MSAA, Ultra shadows and vegetation, and higher resolutions
   and bumps: the Karussell bowl, Flugplatz, Pflanzgarten, the Fuchsröhre dip, and the 300 m climb from
   Breidscheid to Hohe Acht. The road is a 1 m × 0.5 m height grid sampled smoothly by physics and
   graphics alike. (Satellite elevation, used before, was off by up to 28 m under the trees.)
+  - The raw scan carries centimetre sensor noise, which would kick the tyres off the ground. The track
+    builder treats it like a scanned-track pipeline instead: each cross-section of tarmac is fitted with a
+    smooth camber and crown, and the fit is smoothed along the track over a few metres. Real crests,
+    dips and compressions longer than ~10 m stay; the noise goes.
 - The real OSM forest/field/village map decides where ~100k spruce and beech trees grow.
 - Road features: kerbs at every corner, double armco, grass verges, white lines, a rubbered-in racing
   line, black braking marks into the corners, repair patches, and the start/finish line.
@@ -38,8 +42,10 @@ real GPU, use 4–8× MSAA, Ultra shadows and vegetation, and higher resolutions
 - Combined-slip Magic-Formula tyres with load sensitivity, a camber window, relaxation lengths
   (stable down to standstill) and self-aligning torque.
 - 5.4 l V8 torque curve, engine inertia and engine braking. Clutch and diff are solved as friction
-  constraints. Sequential 6-speed with ignition cut, auto-blip and money-shift protection.
-  Clutch-pack LSD (preload + power/coast ramps).
+  constraints, with the brakes in the same solve: with the clutch closed, the engine's inertia (several
+  times the wheels' in the low gears) resists the rear brakes rather than adding to them, so the brake bias
+  you set is the balance you get in every gear. Sequential 6-speed with ignition cut, auto-blip and
+  money-shift protection. Clutch-pack LSD (preload + power/coast ramps).
 - Aero: CdA 1.25, ClA 3.0 with balance; ~600 kg of downforce at 200 km/h.
 - ABS, 6-level traction control and adjustable brake bias, modelled on motorsport systems:
   - ABS controls the fronts per wheel and the rear axle "select-low", so an unloaded inside rear can't
@@ -60,14 +66,17 @@ real GPU, use 4–8× MSAA, Ultra shadows and vegetation, and higher resolutions
 - Validated by `apexsim_tests`:
   - 0–100 km/h in 3.6 s, 0–200 in 9.2 s, 271 km/h top speed, 200–0 in ~80 m
   - ~1.7 g mid-speed grip
-  - a clean AI lap of the Nordschleife in ~7:43 (real GT3: ~7:00)
+  - a clean AI lap of the Nordschleife in ~7:39 (real GT3: ~7:00)
   - steering: ~17–28 Nm at the rim at the limit, ~13 Nm when parked
 - ISO-style handling tests (`apexsim_tests handling`) with the steering held through each event:
   - steady-state circle: understeer gradient positive, and the front lets go first at the limit
   - lifting mid-corner: tucks in without spinning
   - braking in a corner: rotates the car without spinning it
   - full throttle out of a slow corner: a catchable slide at most, with TC on
-  - step steer at 150 km/h: ~7 % yaw overshoot, ~120 ms response
+  - step steer at 150 km/h: ~9 % yaw overshoot, ~100 ms response
+  - brake balance: 30 % pedal at 70 % bias brakes ~68 % on the fronts in 2nd gear as in 4th
+  - light braking with a small steering input: no spin on a flat straight (inputs held) or at fast
+    points of the laser-scanned Nordschleife
 
 **Graphics** (forward HDR renderer)
 - PBR (GGX / Smith / Schlick), with a clear-coat lobe for car paint and carbon.

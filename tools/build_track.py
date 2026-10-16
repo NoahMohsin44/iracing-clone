@@ -511,6 +511,12 @@ def main():
     dh = np.angle(np.exp(1j * (np.roll(hd, -1) - hd)))
     curvature = smooth_closed(dh / SAMPLE_SPACING, 3.0)
 
+    # Tarmac half width per sample.
+    wide = {"T13": 6.0, "Döttinger Höhe": 6.0, "Antoniusbuche": 5.5, "Tiergarten": 5.5, "Hohenrain": 5.5,
+            "Sabine-Schmitz-Kurve": 5.0, "Galgenkopf": 5.0}
+    half = np.array([wide.get(nm, 4.75) for nm in sample_names], np.float64)
+    half = smooth_closed(half, 15.0)
+
     # ------------------------------------------------------------------ elevation
     lat_s, lon_s = proj.to_latlon(pts[:, 0], pts[:, 1])
     pad = 0.02
@@ -551,9 +557,32 @@ def main():
     # Bridge decks are not in a bare-earth model: bridge them over.
     bmask = bridge_rows(load_bridges(proj), pts, SAMPLE_SPACING, rows, SURF_DS)
     surf = fill_rows(surf, bmask)
-    # Light smoothing removes the 1 m grid's interpolation facets but keeps every real feature
-    # longer than a few metres (crests, compressions, camber changes, the bumps).
+    # The lidar points carry centimetre noise. Raw, it becomes a carpet of short bumps that unloads
+    # tyres at speed (and spins the car on a light brake). Treat it like a scanned-track pipeline:
+    #  - across the tarmac, fit every cross-section with a smooth camber + crown (quadratic),
+    #  - along the track, smooth the fit over ~3 m: real crests, dips and compressions longer than
+    #    10-15 m stay, sensor noise goes; the game adds fine road texture procedurally.
     surf = ndimage.gaussian_filter(surf, sigma=(0.8, 0.6), mode=("wrap", "nearest"))
+    half_rows = along(half)
+    L = lat_cols[None, :]
+    wfit = np.clip((half_rows[:, None] + 0.4 - np.abs(L)) / 0.8, 0.0, 1.0)      # tarmac (+ a little)
+    X = np.stack([np.ones_like(L), L, L * L], axis=-1)                            # (1, cols, 3)
+    A = np.einsum("rc,rci,rcj->rij", wfit, np.broadcast_to(X, (rows,) + X.shape[1:]),
+                  np.broadcast_to(X, (rows,) + X.shape[1:]))
+    bvec = np.einsum("rc,rci,rc->ri", wfit, np.broadcast_to(X, (rows,) + X.shape[1:]), surf)
+    coef = np.linalg.solve(A + np.eye(3)[None] * 1e-6, bvec[..., None])[..., 0]  # (rows, 3)
+    for k, sig in enumerate((3.0, 4.0, 8.0)):                                      # height, crossfall, crown
+        coef[:, k] = ndimage.gaussian_filter1d(coef[:, k], sig / SURF_DS, mode="wrap")
+    fit = coef[:, 0:1] + coef[:, 1:2] * L + coef[:, 2:3] * L * L
+    # beyond the tarmac (kerb run-off, verge) keep the scanned shape, smoothed, blended in from the fit
+    outside = ndimage.gaussian_filter(surf, sigma=(2.0 / SURF_DS, 1.0 / SURF_DS), mode=("wrap", "nearest"))
+    blend = np.clip((np.abs(L) - half_rows[:, None]) / 1.5, 0.0, 1.0)
+    blend = blend * blend * (3 - 2 * blend)
+    on = wfit >= 1.0
+    edge = np.abs(np.abs(L) - half_rows[:, None]) < SURF_DL * 0.75
+    print(f"road fit: scan - fit {np.sqrt(np.mean((surf - fit)[on] ** 2)) * 1000:.1f} mm rms on the tarmac, "
+          f"verge - fit at the tarmac edge p95 {np.percentile(np.abs(outside - fit)[edge], 95) * 100:.1f} cm")
+    surf = fit * (1 - blend) + outside * blend
     print(f"road surface: {rows} x {len(lat_cols)} samples, {bmask.sum()} rows bridged")
 
     road = surf[::int(round(SAMPLE_SPACING / SURF_DS)), len(lat_cols) // 2][:n]
@@ -562,11 +591,7 @@ def main():
     print(f"road elevation {road.min():.1f} .. {road.max():.1f} m (lidar - SRTM: mean {dd.mean():.1f}, "
           f"max |diff| {np.abs(dd).max():.1f} m)")
 
-    # ------------------------------------------------------------------ width & banking
-    wide = {"T13": 6.0, "Döttinger Höhe": 6.0, "Antoniusbuche": 5.5, "Tiergarten": 5.5, "Hohenrain": 5.5,
-            "Sabine-Schmitz-Kurve": 5.0, "Galgenkopf": 5.0}
-    half = np.array([wide.get(nm, 4.75) for nm in sample_names], np.float64)
-    half = smooth_closed(half, 15.0)
+    # ------------------------------------------------------------------ banking
     # Cross slope of the scanned surface over the tarmac width (least squares), as a bank angle
     # (positive = right edge lower). Used for orienting cars and cameras; the physics and the road
     # mesh use the full surface grid.
