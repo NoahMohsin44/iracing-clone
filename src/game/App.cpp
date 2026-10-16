@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
@@ -358,10 +359,28 @@ int App::autotest(const std::string& dir) {
         {"09_car_front34", 300.0f, CameraMode::Chase, 2.0f, 35.0f, 5.2f, 1.0f},
         {"10_car_side", 300.0f, CameraMode::Chase, 2.0f, 270.0f, 5.8f, 0.9f},
         {"11_car_rear34", 300.0f, CameraMode::Chase, 2.0f, 145.0f, 5.5f, 1.3f},
+        {"13_car_front", 300.0f, CameraMode::Chase, 2.0f, 0.0f, 6.0f, 0.6f},
+        {"14_car_rear", 300.0f, CameraMode::Chase, 2.0f, 180.0f, 6.0f, 0.9f},
+    };
+    // APEX_SHOTS=car,cockpit renders only the shots whose names contain one of the words
+    const char* only = std::getenv("APEX_SHOTS");
+    auto wanted = [&](const std::string& name) {
+        if (!only || !*only) return true;
+        std::string list = only;
+        size_t a = 0;
+        while (a <= list.size()) {
+            size_t b = list.find(',', a);
+            std::string w = list.substr(a, b == std::string::npos ? std::string::npos : b - a);
+            if (!w.empty() && name.find(w) != std::string::npos) return true;
+            if (b == std::string::npos) break;
+            a = b + 1;
+        }
+        return false;
     };
     // menu shot with the demo running
     // software GL is slow: simulate without drawing, then render a couple of frames per shot
     for (int i = 0; i < 90; ++i) demo_.update(1.0 / 30.0, controls_);
+    if (wanted("00_menu")) {
     for (int i = 0; i < 3; ++i) frame(1.0 / 30.0);
     screenshot(dir + "/00_menu.png");
     menu_.setPage(1);
@@ -375,8 +394,10 @@ int App::autotest(const std::string& dir) {
         screenshot(dir + (tab == 0 ? "/00c_settings_graphics.png" : "/00d_settings_controls.png"));
     }
     settingsMenu_ = SettingsMenu{};
+    }
     state_ = State::Driving;
     for (const Shot& shot : shots) {
+        if (!wanted(shot.name)) continue;
         Session& sess = player_;
         sess.start(&track_, &settings_, true);  // AI driven, HUD visible
         sess.car().resetTo(shot.s, track_.racingLineAt(shot.s));
@@ -409,6 +430,7 @@ int App::autotest(const std::string& dir) {
         LOGI("autotest %s: %.1f ms/frame, gpu %.1f ms", shot.name,
              std::chrono::duration<double, std::milli>(t1 - t0).count() / frames, renderer_.stats().gpuMs);
     }
+    if (!wanted("12_pause")) return 0;
     // pause menu over the last shot
     pauseMenu_ = true;
     player_.paused = true;

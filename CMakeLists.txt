@@ -70,6 +70,7 @@ add_library(apex_thirdparty STATIC
 target_include_directories(apex_thirdparty PUBLIC
   third_party/glad/include
   third_party/stb
+  third_party/cgltf
   ${miniaudio_SOURCE_DIR})
 find_package(Threads REQUIRED)
 target_link_libraries(apex_thirdparty PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
@@ -168,10 +169,12 @@ endif()
 target_compile_definitions(apexsim PRIVATE APEX_SOURCE_ASSETS="${CMAKE_SOURCE_DIR}/assets")
 target_compile_definitions(apex_sim PRIVATE APEX_SOURCE_ASSETS="${CMAKE_SOURCE_DIR}/assets")
 
-# Copy assets next to the binary so the build folder can be zipped and run anywhere.
-add_custom_command(TARGET apexsim POST_BUILD
+# Copy assets next to the binary so the build folder can be zipped and run anywhere (a separate
+# target so edited shaders/models are synced on every build, not only when the exe relinks).
+add_custom_target(apexsim_assets ALL
   COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/assets $<TARGET_FILE_DIR:apexsim>/assets
   COMMENT "Copying assets")
+add_dependencies(apexsim_assets apexsim)
 
 # ---------------------------------------------------------------- tests
 if(APEX_BUILD_TESTS)

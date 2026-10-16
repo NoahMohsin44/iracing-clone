@@ -6,18 +6,23 @@ Sources (fetched once, cached in tools/.cache):
   * Centreline + corner names: OpenStreetMap relation 38566 "Nurburgring Nordschleife"
     (c) OpenStreetMap contributors, ODbL 1.0.
   * Forest / farmland / built-up areas: OpenStreetMap (ODbL 1.0).
-  * Elevation: AWS Terrain Tiles (Terrarium encoding; SRTM / EU-DEM derived, public domain/open).
+  * Elevation near the circuit: DGM1, the 1 m bare-earth terrain model from airborne laser scanning
+    (c) GeoBasis-DE / LVermGeoRP (2025), dl-de/by-2-0, www.lvermgeo.rlp.de. This gives the road its
+    real crests, compressions, cambers and bumps (the Karussell banking, Flugplatz, Pflanzgarten...).
+  * Elevation elsewhere: AWS Terrain Tiles (Terrarium encoding; SRTM / EU-DEM derived, public domain/open).
 
 Outputs (assets/tracks/nordschleife/):
   track.json        metadata (length, sections, heightmap extents, attribution)
   centerline.csv    s, x, y, z, half-width left/right, bank angle  (2 m spacing)
-  height_near.png   16-bit heightmap around the circuit (4 m grid), road already carved in
+  road_surface.png  16-bit laser-scanned road surface: rows every 1 m along the track, columns every
+                    0.5 m across (+-12 m), height relative to the centreline (0.2 mm units)
+  height_near.png   16-bit heightmap around the circuit (4 m grid, lidar), road already carved in
   height_far.png    16-bit heightmap for the horizon (~48 m grid, 24 km square)
   landcover.png     RGB mask aligned with height_near: R forest, G farmland/meadow, B built-up
 
 World coordinates: X = east, Y = up, Z = south (right-handed, metres), origin at track centre.
 
-Requires: numpy, scipy, pillow.   Usage:  python tools/build_track.py
+Requires: numpy, scipy, pillow, pyproj.   Usage:  python tools/build_track.py
 """
 import io
 import json
@@ -27,6 +32,9 @@ import sys
 import time
 import urllib.request
 import xml.etree.ElementTree as ET
+
+import re
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -44,6 +52,11 @@ NEAR_RES = 4.0                # metres per heightmap texel near the track
 NEAR_MARGIN = 700.0           # metres of terrain beyond the track bounding box
 FAR_SIZE = 24000.0            # metres, square horizon heightmap
 FAR_RES = 48.0
+SURF_DS = 1.0                 # road surface grid: metres between rows (along the track)
+SURF_DL = 0.5                 # metres between columns (across)
+SURF_HALF = 12.0              # lateral extent either side of the centreline
+SURF_SCALE = 0.0002           # metres per unit of the 16-bit relative height
+BRIDGE_MARGIN = 8.0           # metres of interpolation either side of a bridge deck
 START_SECTION = "T13"         # start/finish straight (Nordschleife-only layout)
 START_OFFSET = 120.0          # metres into the T13 section
 
@@ -123,6 +136,55 @@ def load_centreline():
     return np.array(pts), names
 
 
+def load_bridges(proj):
+    """(x, z) end points of the bridge decks the track runs over (OSM bridge=yes members)."""
+    root = ET.fromstring(fetch(f"https://api.openstreetmap.org/api/0.6/relation/{RELATION_ID}/full",
+                               f"relation_{RELATION_ID}.xml"))
+    nodes = {n.get("id"): (float(n.get("lat")), float(n.get("lon"))) for n in root.findall("node")}
+    spans = []
+    for w in root.findall("way"):
+        tags = {t.get("k"): t.get("v") for t in w.findall("tag")}
+        if tags.get("bridge") in (None, "no"):
+            continue
+        ll = np.array([nodes[nd.get("ref")] for nd in w.findall("nd")])
+        x, z = proj.to_xz(ll[:, 0], ll[:, 1])
+        spans.append(np.stack([x, z], axis=1))
+    return spans
+
+
+def bridge_rows(spans, pts, spacing, rows, ds):
+    """Boolean mask over surface rows (spacing ds) covering each bridge deck plus a margin."""
+    tree = cKDTree(pts)
+    n = len(pts)
+    mask = np.zeros(rows, bool)
+    for sp in spans:
+        _, idx = tree.query(sp)
+        s_a, s_b = idx.min() * spacing, idx.max() * spacing
+        if s_b - s_a > n * spacing / 2:   # wraps around the start line
+            s_a, s_b = s_b, s_a + n * spacing
+        r0 = int(np.floor((s_a - BRIDGE_MARGIN) / ds))
+        r1 = int(np.ceil((s_b + BRIDGE_MARGIN) / ds))
+        mask[np.arange(r0, r1 + 1) % rows] = True
+    return mask
+
+
+def fill_rows(values, mask):
+    """Linear interpolation (closed loop) of values over the masked rows; works on 1-D and 2-D."""
+    rows = len(values)
+    good = np.where(~mask)[0]
+    if len(good) == len(values):
+        return values
+    ext = np.concatenate([good - rows, good, good + rows])
+    out = values.copy()
+    bad = np.where(mask)[0]
+    if values.ndim == 1:
+        out[bad] = np.interp(bad, ext, np.tile(values[good], 3))
+    else:
+        for c in range(values.shape[1]):
+            out[bad, c] = np.interp(bad, ext, np.tile(values[good, c], 3))
+    return out
+
+
 def catmull_rom_closed(p, spacing):
     """Resample a closed polyline with a centripetal Catmull-Rom spline at ~uniform spacing."""
     n = len(p)
@@ -198,6 +260,72 @@ class Terrarium:
         px = ((lon + 180.0) / 360.0 * n - self.tx0) * 256.0 - 0.5
         py = ((1.0 - np.arcsinh(np.tan(np.radians(lat))) / np.pi) / 2.0 * n - self.ty0) * 256.0 - 0.5
         return ndimage.map_coordinates(self.data, [py.ravel(), px.ravel()], order=3, mode="nearest").reshape(lat.shape)
+
+
+# ----------------------------------------------------------------------------- lidar (DGM1 Rheinland-Pfalz)
+class Dgm1:
+    """1 m bare-earth elevation (ETRS89 / UTM 32N) from the open-data 1 km GeoTIFF tiles."""
+    BASE = "https://geobasis-rlp.de/data/dgm1/current"
+
+    def __init__(self, proj):
+        from pyproj import Transformer
+        self.to_utm = Transformer.from_crs("EPSG:4326", "EPSG:25832", always_xy=True)
+        self.proj = proj
+        index = fetch(f"{self.BASE}/meta4/dgm1_tif_07.meta4", "dgm1_tif_07.meta4").decode("utf-8")
+        self.names = {(int(m.group(2)), int(m.group(3))): m.group(1)
+                      for m in re.finditer(r'<file name="(dgm1_32_(\d+)_(\d+)_1_rp_\d+\.tif)">', index)}
+        self.tiles = {}
+
+    def utm(self, x, z):
+        lat, lon = self.proj.to_latlon(np.asarray(x, np.float64), np.asarray(z, np.float64))
+        e, n = self.to_utm.transform(lon, lat)
+        return np.asarray(e), np.asarray(n)
+
+    def load(self, keys):
+        keys = [k for k in set(keys) if k in self.names and k not in self.tiles]
+        os.makedirs(os.path.join(CACHE, "dgm1"), exist_ok=True)
+
+        def get(k):
+            name = self.names[k]
+            fetch(f"{self.BASE}/tif/{name}", os.path.join("dgm1", name))
+        with ThreadPoolExecutor(6) as ex:
+            list(ex.map(get, keys))
+        for k in keys:
+            with open(os.path.join(CACHE, "dgm1", self.names[k]), "rb") as f:
+                self.tiles[k] = np.asarray(Image.open(io.BytesIO(f.read())), np.float32)
+        print(f"lidar: {len(self.tiles)} tiles loaded")
+
+    def sample(self, x, z):
+        """Bilinear height at world (x, z); NaN where no tile is available."""
+        e, n = self.utm(x, z)
+        shape = e.shape
+        e, n = e.ravel(), n.ravel()
+        # pixel centres sit at (k + 0.5) m; rows count down from the tile's north edge
+        col = e - 0.5
+        row = -(n - 0.5)
+        c0 = np.floor(col).astype(np.int64)
+        r0 = np.floor(row).astype(np.int64)
+        fc, fr = col - c0, row - r0
+        out = np.zeros(e.shape, np.float64)
+        for dr, dc, wgt in ((0, 0, (1 - fr) * (1 - fc)), (0, 1, (1 - fr) * fc), (1, 0, fr * (1 - fc)), (1, 1, fr * fc)):
+            out += wgt * self._px(r0 + dr, c0 + dc)
+        return out.reshape(shape)
+
+    def _px(self, rows, cols):
+        # global pixel (row counts down from N=0, col from E=0) -> tile lookup
+        # pixel centre: E = col + 0.5, N = -row + 0.5; a tile's row 0 is its northern edge
+        te = np.floor_divide(cols, 1000)
+        tn = np.floor_divide(-rows, 1000)
+        lc = cols - te * 1000
+        lr = rows + tn * 1000 + 999
+        vals = np.full(rows.shape, np.nan)
+        for k in set(zip(te.tolist(), tn.tolist())):
+            t = self.tiles.get(k)
+            if t is None:
+                continue
+            m = (te == k[0]) & (tn == k[1])
+            vals[m] = t[lr[m], lc[m]]
+        return vals
 
 
 # ----------------------------------------------------------------------------- landcover (OSM)
@@ -358,24 +486,70 @@ def main():
     lat_s, lon_s = proj.to_latlon(pts[:, 0], pts[:, 1])
     pad = 0.02
     dem_near = Terrarium(14, lat_s.min() - pad, lat_s.max() + pad, lon_s.min() - pad * 1.6, lon_s.max() + pad * 1.6)
-    road_raw = dem_near.sample(lat_s, lon_s)
-    # Robust smoothing: median over 40 m kills canopy/bridge spikes, gaussian gives a drivable profile.
-    road = ndimage.median_filter(road_raw, size=21, mode="wrap")
-    road = smooth_closed(road, 9.0)   # sigma 18 m
-    print(f"road elevation {road.min():.1f} .. {road.max():.1f} m (raw {road_raw.min():.1f} .. {road_raw.max():.1f})")
+
+    # Lidar tiles for the whole near-heightmap area (the road needs only the corridor, the scenery
+    # around it looks right only with bare-earth heights - SRTM measures the tree tops).
+    xmin, xmax = pts[:, 0].min() - NEAR_MARGIN, pts[:, 0].max() + NEAR_MARGIN
+    zmin, zmax = pts[:, 1].min() - NEAR_MARGIN, pts[:, 1].max() + NEAR_MARGIN
+    lidar = Dgm1(proj)
+    ce, cn = lidar.utm(np.array([xmin, xmax, xmin, xmax]), np.array([zmin, zmin, zmax, zmax]))
+    lidar.load([(te, tn) for te in range(int(ce.min() // 1000), int(ce.max() // 1000) + 1)
+                for tn in range(int(cn.min() // 1000), int(cn.max() // 1000) + 1)])
+
+    # Road surface grid: rows every SURF_DS along the centreline, columns across it.
+    tang = np.roll(pts, -1, axis=0) - np.roll(pts, 1, axis=0)
+    tang /= np.linalg.norm(tang, axis=1, keepdims=True)
+    nrm = np.stack([-tang[:, 1], tang[:, 0]], axis=1)  # points to the right of travel
+    rows = int(round(length / SURF_DS))
+    s_rows = np.arange(rows) * SURF_DS
+    s_smp = np.arange(n + 1) * SAMPLE_SPACING
+    def along(v):  # linear interpolation of per-sample values at the surface rows (closed loop)
+        v = np.vstack([v, v[:1]]) if v.ndim == 2 else np.concatenate([v, v[:1]])
+        if v.ndim == 1:
+            return np.interp(s_rows, s_smp, v)
+        return np.stack([np.interp(s_rows, s_smp, v[:, k]) for k in range(v.shape[1])], axis=1)
+    p_rows = along(pts)
+    n_rows = along(nrm)
+    n_rows /= np.linalg.norm(n_rows, axis=1, keepdims=True)
+    lat_cols = np.arange(-SURF_HALF, SURF_HALF + 1e-6, SURF_DL)
+    SX = p_rows[:, 0:1] + n_rows[:, 0:1] * lat_cols[None, :]
+    SZ = p_rows[:, 1:2] + n_rows[:, 1:2] * lat_cols[None, :]
+    surf = lidar.sample(SX, SZ)
+    if np.isnan(surf).any():
+        print(f"  warning: {np.isnan(surf).mean() * 100:.2f}% of the road surface has no lidar; using SRTM")
+        sl, so = proj.to_latlon(SX, SZ)
+        surf = np.where(np.isnan(surf), dem_near.sample(sl, so), surf)
+    # Bridge decks are not in a bare-earth model: bridge them over.
+    bmask = bridge_rows(load_bridges(proj), pts, SAMPLE_SPACING, rows, SURF_DS)
+    surf = fill_rows(surf, bmask)
+    # Light smoothing removes the 1 m grid's interpolation facets but keeps every real feature
+    # longer than a few metres (crests, compressions, camber changes, the bumps).
+    surf = ndimage.gaussian_filter(surf, sigma=(0.8, 0.6), mode=("wrap", "nearest"))
+    print(f"road surface: {rows} x {len(lat_cols)} samples, {bmask.sum()} rows bridged")
+
+    road = surf[::int(round(SAMPLE_SPACING / SURF_DS)), len(lat_cols) // 2][:n]
+    road_old = ndimage.median_filter(dem_near.sample(lat_s, lon_s), size=21, mode="wrap")
+    dd = road - smooth_closed(road_old, 9.0)
+    print(f"road elevation {road.min():.1f} .. {road.max():.1f} m (lidar - SRTM: mean {dd.mean():.1f}, "
+          f"max |diff| {np.abs(dd).max():.1f} m)")
 
     # ------------------------------------------------------------------ width & banking
     wide = {"T13": 6.0, "Döttinger Höhe": 6.0, "Antoniusbuche": 5.5, "Tiergarten": 5.5, "Hohenrain": 5.5,
             "Sabine-Schmitz-Kurve": 5.0, "Galgenkopf": 5.0}
     half = np.array([wide.get(nm, 4.75) for nm in sample_names], np.float64)
     half = smooth_closed(half, 15.0)
-    bank = np.clip(curvature * 25.0, -0.035, 0.035)   # gentle banking into corners (rad)
-    is_karussell = np.array([nm == "Karussell" for nm in sample_names])
-    # The Karussell: steep concrete banking towards the inside of the (left-hand) corner.
-    kar = smooth_closed(is_karussell.astype(np.float64), 6.0)
-    sign = np.sign(smooth_closed(curvature, 10.0))
-    bank = bank * (1 - kar) + kar * sign * math.radians(14.0)
-    bank = smooth_closed(bank, 3.0)
+    # Cross slope of the scanned surface over the tarmac width (least squares), as a bank angle
+    # (positive = right edge lower). Used for orienting cars and cameras; the physics and the road
+    # mesh use the full surface grid.
+    srows = surf[::int(round(SAMPLE_SPACING / SURF_DS))][:n]
+    bank = np.zeros(n)
+    for i in range(n):
+        m = np.abs(lat_cols) <= half[i]
+        L = lat_cols[m]
+        slope = np.polyfit(L, srows[i, m], 1)[0]
+        bank[i] = math.atan(-slope)
+    bank = smooth_closed(bank, 2.0)
+    print(f"bank from lidar: {np.degrees(bank).min():.1f} .. {np.degrees(bank).max():.1f} deg")
 
     # ------------------------------------------------------------------ write centreline
     origin_y = float(np.floor(road.min() / 10.0) * 10.0 - 20.0)   # keep world Y small-ish
@@ -392,38 +566,66 @@ def main():
     if len(sections) > 1 and sections[-1]["name"] == sections[0]["name"]:
         sections.pop()  # the wrap-around chunk belongs to the first section
 
+    # ------------------------------------------------------------------ road surface grid
+    # Heights are stored relative to the centreline as the game interpolates it (uniform Catmull-Rom
+    # through the 2 m samples), so centre + relative reproduces the scan exactly at every row.
+    yc = road - origin_y
+    step = int(round(SAMPLE_SPACING / SURF_DS))
+    yc_rows = np.empty(rows)
+    for k in range(step):
+        t = k / step
+        y0, y1, y2, y3 = np.roll(yc, 1), yc, np.roll(yc, -1), np.roll(yc, -2)
+        yc_rows[k::step] = 0.5 * ((2 * y1) + (-y0 + y2) * t + (2 * y0 - 5 * y1 + 4 * y2 - y3) * t * t +
+                                  (-y0 + 3 * y1 - 3 * y2 + y3) * t ** 3)[:len(yc_rows[k::step])]
+    rel = (surf - origin_y) - yc_rows[:, None]
+    q = np.clip(np.round(rel / SURF_SCALE) + 32768, 0, 65535).astype(np.uint16)
+    Image.fromarray(q).save(os.path.join(OUT, "road_surface.png"))
+    clipped = (np.abs(rel) > 32767 * SURF_SCALE).mean()
+    print(f"road_surface.png: relative heights {rel.min():.2f} .. {rel.max():.2f} m, clipped {clipped * 100:.2f}%")
+
     # ------------------------------------------------------------------ near heightmap
-    xmin, xmax = pts[:, 0].min() - NEAR_MARGIN, pts[:, 0].max() + NEAR_MARGIN
-    zmin, zmax = pts[:, 1].min() - NEAR_MARGIN, pts[:, 1].max() + NEAR_MARGIN
     nx = int(math.ceil((xmax - xmin) / NEAR_RES)) + 1
     nz = int(math.ceil((zmax - zmin) / NEAR_RES)) + 1
     gx = xmin + np.arange(nx) * NEAR_RES
     gz = zmin + np.arange(nz) * NEAR_RES
     GX, GZ = np.meshgrid(gx, gz)
     glat, glon = proj.to_latlon(GX, GZ)
-    height = dem_near.sample(glat, glon) - origin_y
-    height = ndimage.gaussian_filter(height, 1.0)
-    print(f"near heightmap {nx}x{nz} @ {NEAR_RES} m")
+    srtm = dem_near.sample(glat, glon) - origin_y
+    lid = lidar.sample(GX, GZ) - origin_y
+    valid = ~np.isnan(lid)
+    # Fade from lidar to SRTM towards missing tiles and the outer border (where the far terrain,
+    # also SRTM, takes over), so there is no step in the landscape.
+    fade = ndimage.distance_transform_edt(valid) * NEAR_RES
+    edge = np.minimum.reduce([GX - xmin, xmax - GX, GZ - zmin, zmax - GZ])
+    wl = np.clip(np.minimum(fade, edge) / 300.0, 0.0, 1.0)
+    wl = wl * wl * (3 - 2 * wl)
+    height = np.where(valid, lid, srtm) * wl + srtm * (1 - wl)
+    height = ndimage.gaussian_filter(height, 0.6)
+    print(f"near heightmap {nx}x{nz} @ {NEAR_RES} m, lidar covers {valid.mean() * 100:.0f}%")
 
     # Carve the road: nearest centreline sample per texel -> lateral offset -> blend to road profile.
     ctree = cKDTree(pts)
     dist, ci = ctree.query(np.stack([GX.ravel(), GZ.ravel()], axis=1), k=1, workers=-1)
     ci = ci.reshape(GX.shape)
-    tang = np.roll(pts, -1, axis=0) - np.roll(pts, 1, axis=0)
-    tang /= np.linalg.norm(tang, axis=1, keepdims=True)
-    nrm = np.stack([-tang[:, 1], tang[:, 0]], axis=1)  # points to the right of travel
-    rel = np.stack([GX - pts[ci, 0], GZ - pts[ci, 1]], axis=-1)
-    lateral = rel[..., 0] * nrm[ci, 0] + rel[..., 1] * nrm[ci, 1]
-    road_y = (road[ci] - origin_y) - np.tan(bank[ci]) * np.clip(lateral, -half[ci], half[ci])
+    off = np.stack([GX - pts[ci, 0], GZ - pts[ci, 1]], axis=-1)
+    lateral = off[..., 0] * nrm[ci, 0] + off[..., 1] * nrm[ci, 1]
+    # scanned height at the texel's lateral position, clamped to the verge's outer edge (the verge
+    # mesh runs from the road edge down/up to the terrain there)
+    col = (np.clip(lateral, -half[ci] - 3.5, half[ci] + 3.5) + SURF_HALF) / SURF_DL
+    c0 = np.clip(np.floor(col).astype(int), 0, len(lat_cols) - 2)
+    fcol = col - c0
+    row = (ci * int(round(SAMPLE_SPACING / SURF_DS))) % rows
+    road_y = (surf[row, c0] * (1 - fcol) + surf[row, c0 + 1] * fcol) - origin_y
     w = half[ci]
     flat = w + 3.5
-    blend = np.clip((np.abs(lateral) - flat) / 32.0, 0.0, 1.0)
+    # the scanned terrain is right next to the road, so only a short blend is needed
+    blend = np.clip((np.abs(lateral) - flat) / 8.0, 0.0, 1.0)
     blend = blend * blend * (3 - 2 * blend)
     # Under the road surface the terrain sits just below so it never pokes through.
     under = np.clip((np.abs(lateral) - w) / 3.5, 0.0, 1.0)  # 0 under the road .. 1 at the verge's outer edge
     road_level = road_y - 0.35 + 0.29 * under
     carved = road_level * (1 - blend) + height * blend
-    height = np.where(np.abs(lateral) < flat + 32.0, carved, height)
+    height = np.where(np.abs(lateral) < flat + 8.0, carved, height)
 
     hmin, hmax = float(height.min()), float(height.max())
     q = np.clip((height - hmin) / (hmax - hmin) * 65535.0, 0, 65535).astype(np.uint16)
@@ -482,9 +684,12 @@ def main():
         "heightFar": {"file": "height_far.png", "x0": float(-half_far), "z0": float(-half_far), "res": FAR_RES,
                        "w": nf, "h": nf, "min": fmin, "max": fmax},
         "landcover": {"file": "landcover.png"},
+        "roadSurface": {"file": "road_surface.png", "ds": SURF_DS, "lat0": -SURF_HALF, "dl": SURF_DL,
+                        "rows": rows, "cols": len(lat_cols), "scale": SURF_SCALE},
         "attribution": [
             "Track layout, corner names and land cover (c) OpenStreetMap contributors, ODbL 1.0",
-            "Elevation: AWS Terrain Tiles (Mapzen terrarium), derived from SRTM/EU-DEM/GMTED",
+            "Road surface and terrain: DGM1 laser scan (c) GeoBasis-DE / LVermGeoRP (2025), dl-de/by-2-0",
+            "Distant elevation: AWS Terrain Tiles (Mapzen terrarium), derived from SRTM/EU-DEM/GMTED",
         ],
     }
     with open(os.path.join(OUT, "track.json"), "w", encoding="utf-8") as f:

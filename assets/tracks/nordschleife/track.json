@@ -185,8 +185,8 @@
     "res": 4.0,
     "w": 1873,
     "h": 1564,
-    "min": -9.381945610046387,
-    "max": 408.3251647949219
+    "min": -13.252354055333992,
+    "max": 416.5324046141151
   },
   "heightFar": {
     "file": "height_far.png",
@@ -201,8 +201,18 @@
   "landcover": {
     "file": "landcover.png"
   },
+  "roadSurface": {
+    "file": "road_surface.png",
+    "ds": 1.0,
+    "lat0": -12.0,
+    "dl": 0.5,
+    "rows": 20770,
+    "cols": 49,
+    "scale": 0.0002
+  },
   "attribution": [
     "Track layout, corner names and land cover (c) OpenStreetMap contributors, ODbL 1.0",
-    "Elevation: AWS Terrain Tiles (Mapzen terrarium), derived from SRTM/EU-DEM/GMTED"
+    "Road surface and terrain: DGM1 laser scan (c) GeoBasis-DE / LVermGeoRP (2025), dl-de/by-2-0",
+    "Distant elevation: AWS Terrain Tiles (Mapzen terrarium), derived from SRTM/EU-DEM/GMTED"
   ]
 }

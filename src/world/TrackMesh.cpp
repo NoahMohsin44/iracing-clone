@@ -64,8 +64,10 @@ void TrackMesh::build(const TrackData& t) {
         MeshData road, verge, rails, posts;
 
         const int stations = static_cast<int>(std::round((s1 - ch.s0) / kStep)) + 1;
-        const float latFrac[] = {-1.0f, -0.66f, -0.33f, 0.0f, 0.33f, 0.66f, 1.0f};
-        const int cols = 7;
+        // ~0.8 m across: enough to follow the scanned camber and crown of the road
+        const float latFrac[] = {-1.0f, -0.833f, -0.667f, -0.5f, -0.333f, -0.167f, 0.0f,
+                                 0.167f, 0.333f, 0.5f, 0.667f, 0.833f, 1.0f};
+        const int cols = 13;
         std::vector<bool> kerbL(stations), kerbR(stations);
         for (int k = 0; k < stations; ++k) {
             const float s = ch.s0 + k * kStep;

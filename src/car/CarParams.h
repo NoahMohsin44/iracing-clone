@@ -111,7 +111,7 @@ struct CarParams {
     float steeringWheelLock = 540.0f;   // lock-to-lock of the car's steering wheel (deg)
     float brakeBias = 0.575f;           // front fraction
     float maxBrakeTorque = 12400.0f;    // sum of all four corners at 100% pedal (Nm)
-    glm::vec3 driverEye{-0.37f, 0.56f, 0.18f};  // relative to CG in body frame (x right, y up, z back)
+    glm::vec3 driverEye{-0.37f, 0.585f, 0.18f};  // relative to CG in body frame (x right, y up, z back)
     glm::vec3 bodyHalfExtents{1.0f, 0.62f, 2.3f};
     float bodyCentreZ = 0.12f;          // geometric body centre relative to CG along z (positive = behind)
 

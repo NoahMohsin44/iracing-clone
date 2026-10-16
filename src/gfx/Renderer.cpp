@@ -65,7 +65,7 @@ bool Renderer::init(const TrackData& track, const RenderSettings& rs, const std:
     progress(0.7f, "Planting the Green Hell");
     vegetation_.build(track, rs.vegetationQuality);
     progress(0.9f, "Assembling the car");
-    carModel_.build(CarModel::Geometry{});
+    if (!carModel_.load(paths::asset("cars/gt3/gt3.glb"), CarModel::Geometry{})) carModel_.build(CarModel::Geometry{});
 
     glCreateBuffers(1, &ubo_);
     glNamedBufferStorage(ubo_, sizeof(FrameUBO), nullptr, GL_DYNAMIC_STORAGE_BIT);
@@ -140,7 +140,7 @@ void Renderer::drawCars(const Camera& cam, const std::vector<CarVisual>& cars, c
             sh.set("uMode", mode);
         }
         sh.set("uModel", body);
-        if (!shadow) sh.set("uIsBody", 1);
+        if (!shadow) sh.set("uIsBody", m.loaded() ? 2 : 1);
         m.body.draw();
         if (mode == 1) continue;
         if (!shadow) sh.set("uIsBody", 0);

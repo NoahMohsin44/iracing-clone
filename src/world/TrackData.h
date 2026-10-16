@@ -122,7 +122,8 @@ public:
     float barrierAt(float s, int side) const;
     float racingLineAt(float s) const;
     float speedHintAt(float s) const;
-    float roadHeight(float s, float lateral) const;  // includes banking, not kerbs
+    float roadHeight(float s, float lateral) const;  // laser-scanned surface (or banked plane), not kerbs
+    bool hasScannedSurface() const { return surface_.rows > 0; }
     glm::vec3 surfacePoint(float s, float lateral) const;
     bool kerbAt(float s, int side) const;
     float kerbProfile(float s, float u) const;       // u: 0 inner edge .. 1 outer edge
@@ -148,6 +149,15 @@ private:
     std::vector<std::string> attribution_;
     Heightmap near_, far_;
     std::vector<uint8_t> landcover_;
+
+    // Laser-scanned road surface: heights relative to the centreline on a grid of rows along the
+    // track (ds apart) and columns across it (dl apart, starting at lat0). Empty for test tracks.
+    struct RoadSurface {
+        int rows = 0, cols = 0;
+        float ds = 1.0f, lat0 = -12.0f, dl = 0.5f;
+        std::vector<float> rel;
+        float at(int r, int c) const;
+    } surface_;
 
     // uniform grid of sample indices for global nearest-sample search
     float gridX0_ = 0, gridZ0_ = 0, gridCell_ = 32.0f;

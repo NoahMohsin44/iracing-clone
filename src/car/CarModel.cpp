@@ -2,10 +2,15 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <map>
 #include <utility>
 #include <vector>
 
 #include <glm/gtc/matrix_transform.hpp>
+
+#include "cgltf.h"
+#include "core/Log.h"
 
 namespace apex {
 
@@ -450,6 +455,163 @@ void CarModel::build(const Geometry& g) {
         c.computeTangents();
         caliper[axle].upload(c);
     }
+}
+
+}  // namespace apex
+
+// ============================================================================ glTF model
+namespace apex {
+
+namespace {
+float materialId(const char* name) {
+    static const std::map<std::string, float> ids = {
+        {"Body", carmat::Body},           {"Carbon", carmat::Carbon},       {"BlackPlastic", carmat::BlackPlastic},
+        {"Glass", carmat::Glass},         {"Headlight", carmat::Headlight}, {"Taillight", carmat::Taillight},
+        {"Chrome", carmat::Chrome},       {"Rubber", carmat::Rubber},       {"Rim", carmat::Rim},
+        {"BrakeDisc", carmat::BrakeDisc}, {"Caliper", carmat::Caliper},     {"Interior", carmat::Interior},
+        {"Seat", carmat::Seat},           {"Display", carmat::Display},     {"ArchLiner", carmat::ArchLiner},
+        {"ShiftLeds", carmat::ShiftLeds}, {"Cage", carmat::Cage},           {"Helmet", carmat::Helmet},
+        {"Visor", carmat::Visor},         {"Suit", carmat::Suit},           {"Trim", carmat::Trim}};
+    if (!name) return carmat::Body;
+    std::string n(name);
+    auto dot = n.find('.');
+    if (dot != std::string::npos) n = n.substr(0, dot);  // Blender duplicates: "Body.001"
+    auto it = ids.find(n);
+    return it == ids.end() ? carmat::Interior : it->second;
+}
+
+bool isMat(const Vertex& v, float id) { return std::abs(v.color.w - id) < 0.5f; }
+
+// Per-vertex data the car shader expects but the model doesn't carry.
+void derivePartData(MeshData& m) {
+    // tyre tread band (uv.y in 0.25..0.75 = tread)
+    float rMax = 0.0f;
+    for (auto& v : m.vertices)
+        if (isMat(v, carmat::Rubber)) rMax = std::max(rMax, glm::length(glm::vec2(v.pos.y, v.pos.z)));
+    for (auto& v : m.vertices)
+        if (isMat(v, carmat::Rubber)) {
+            float r = glm::length(glm::vec2(v.pos.y, v.pos.z));
+            v.uv.y = (r > rMax - 0.006f && std::abs(v.pos.x) < 0.125f) ? 0.5f : 0.05f;
+        }
+    // shift lights: index 0..1 from left to right
+    float lo = 1e9f, hi = -1e9f;
+    for (auto& v : m.vertices)
+        if (isMat(v, carmat::ShiftLeds)) lo = std::min(lo, v.pos.x), hi = std::max(hi, v.pos.x);
+    for (auto& v : m.vertices)
+        if (isMat(v, carmat::ShiftLeds)) v.color.z = std::clamp((v.pos.x - lo) / std::max(1e-4f, hi - lo), 0.0f, 1.0f);
+    // displays: planar uv over each panel (panels are separated by > 15 cm)
+    std::vector<size_t> disp;
+    for (size_t i = 0; i < m.vertices.size(); ++i)
+        if (isMat(m.vertices[i], carmat::Display)) disp.push_back(i);
+    std::vector<int> group(disp.size(), -1);
+    int groups = 0;
+    for (size_t i = 0; i < disp.size(); ++i) {
+        if (group[i] >= 0) continue;
+        group[i] = groups;
+        for (size_t j = i + 1; j < disp.size(); ++j)
+            if (group[j] < 0 && glm::length(m.vertices[disp[i]].pos - m.vertices[disp[j]].pos) < 0.15f) group[j] = groups;
+        ++groups;
+    }
+    for (int gi = 0; gi < groups; ++gi) {
+        glm::vec2 mn(1e9f), mx(-1e9f);
+        for (size_t i = 0; i < disp.size(); ++i)
+            if (group[i] == gi) {
+                glm::vec2 q(m.vertices[disp[i]].pos.x, m.vertices[disp[i]].pos.y);
+                mn = glm::min(mn, q);
+                mx = glm::max(mx, q);
+            }
+        for (size_t i = 0; i < disp.size(); ++i)
+            if (group[i] == gi) {
+                Vertex& v = m.vertices[disp[i]];
+                v.uv = (glm::vec2(v.pos.x, v.pos.y) - mn) / glm::max(mx - mn, glm::vec2(1e-4f));
+            }
+    }
+}
+}  // namespace
+
+bool CarModel::load(const std::string& path, const Geometry& g) {
+    geo = g;
+    cgltf_options opt{};
+    cgltf_data* data = nullptr;
+    if (cgltf_parse_file(&opt, path.c_str(), &data) != cgltf_result_success) {
+        LOGW("Car model %s not found", path.c_str());
+        return false;
+    }
+    if (cgltf_load_buffers(&opt, data, path.c_str()) != cgltf_result_success) {
+        LOGW("Car model %s: buffers failed to load", path.c_str());
+        cgltf_free(data);
+        return false;
+    }
+    std::map<std::string, MeshData> nodes;
+    size_t tris = 0;
+    for (size_t ni = 0; ni < data->nodes_count; ++ni) {
+        const cgltf_node& node = data->nodes[ni];
+        if (!node.mesh || !node.name) continue;
+        float w[16];
+        cgltf_node_transform_world(&node, w);
+        glm::mat4 xf;
+        std::memcpy(&xf[0][0], w, sizeof(w));
+        const glm::mat3 nxf = glm::transpose(glm::inverse(glm::mat3(xf)));
+        MeshData& md = nodes[node.name];
+        for (size_t pi = 0; pi < node.mesh->primitives_count; ++pi) {
+            const cgltf_primitive& prim = node.mesh->primitives[pi];
+            if (prim.type != cgltf_primitive_type_triangles) continue;
+            const cgltf_accessor *pos = nullptr, *nrm = nullptr;
+            for (size_t ai = 0; ai < prim.attributes_count; ++ai) {
+                if (prim.attributes[ai].type == cgltf_attribute_type_position) pos = prim.attributes[ai].data;
+                if (prim.attributes[ai].type == cgltf_attribute_type_normal) nrm = prim.attributes[ai].data;
+            }
+            if (!pos) continue;
+            const float mat = materialId(prim.material ? prim.material->name : nullptr);
+            const uint32_t base = static_cast<uint32_t>(md.vertices.size());
+            for (size_t k = 0; k < pos->count; ++k) {
+                Vertex v;
+                float p[3] = {0, 0, 0}, n[3] = {0, 1, 0};
+                cgltf_accessor_read_float(pos, k, p, 3);
+                if (nrm) cgltf_accessor_read_float(nrm, k, n, 3);
+                v.pos = glm::vec3(xf * glm::vec4(p[0], p[1], p[2], 1.0f));
+                v.normal = glm::normalize(nxf * glm::vec3(n[0], n[1], n[2]));
+                v.color = glm::vec4(1.0f, 1.0f, 0.0f, mat);
+                md.vertices.push_back(v);
+            }
+            if (prim.indices) {
+                for (size_t k = 0; k < prim.indices->count; ++k)
+                    md.indices.push_back(base + static_cast<uint32_t>(cgltf_accessor_read_index(prim.indices, k)));
+            } else {
+                for (size_t k = 0; k < pos->count; ++k) md.indices.push_back(base + static_cast<uint32_t>(k));
+            }
+        }
+        tris += md.indices.size() / 3;
+    }
+    cgltf_free(data);
+
+    const char* required[] = {"body", "exterior", "interior", "driver", "steering_wheel",
+                              "wheel_front", "wheel_rear", "caliper_front", "caliper_rear"};
+    for (const char* r : required)
+        if (!nodes.count(r) || nodes[r].vertices.empty()) {
+            LOGW("Car model %s: missing part '%s'", path.c_str(), r);
+            return false;
+        }
+    auto finish = [](MeshData& m, GpuMesh& gpu) {
+        derivePartData(m);
+        m.computeTangents();
+        gpu.upload(m);
+    };
+    MeshData partsData = nodes["exterior"];
+    partsData.append(nodes["interior"]);
+    finish(nodes["body"], body);
+    finish(partsData, parts);
+    finish(nodes["driver"], driver);
+    finish(nodes["steering_wheel"], steeringWheel);
+    finish(nodes["wheel_front"], wheel[0]);
+    finish(nodes["wheel_rear"], wheel[1]);
+    finish(nodes["caliper_front"], caliper[0]);
+    finish(nodes["caliper_rear"], caliper[1]);
+    // openings are modelled, the shader needn't cut any
+    arches[0] = arches[1] = glm::vec4(0.0f, 0.0f, 0.0f, 10.0f);
+    loaded_ = true;
+    LOGI("Car model: %s (%zu triangles)", path.c_str(), tris);
+    return true;
 }
 
 }  // namespace apex

@@ -137,6 +137,26 @@ bool TrackData::load(const std::string& dir) {
     };
     if (!loadHm(near_, meta["heightNear"]) || !loadHm(far_, meta["heightFar"])) return false;
 
+    const Json& rs = meta["roadSurface"];
+    if (rs["file"].str().size()) {
+        int w = 0, h = 0, comp = 0;
+        stbi_us* px = stbi_load_16((dir + "/" + rs["file"].str()).c_str(), &w, &h, &comp, 1);
+        if (px && w == rs["cols"].i() && h == rs["rows"].i()) {
+            surface_.rows = h;
+            surface_.cols = w;
+            surface_.ds = rs["ds"].f(1.0f);
+            surface_.lat0 = rs["lat0"].f(-12.0f);
+            surface_.dl = rs["dl"].f(0.5f);
+            const float scale = rs["scale"].f(0.0002f);
+            surface_.rel.resize(static_cast<size_t>(w) * h);
+            for (size_t i = 0; i < surface_.rel.size(); ++i) surface_.rel[i] = (static_cast<float>(px[i]) - 32768.0f) * scale;
+            LOGI("Road surface: %dx%d laser-scanned samples", h, w);
+        } else {
+            LOGW("Road surface grid missing or mismatched; using banked centreline");
+        }
+        if (px) stbi_image_free(px);
+    }
+
     int lw = 0, lh = 0, lc = 0;
     unsigned char* lcpx = stbi_load((dir + "/" + meta["landcover"]["file"].str()).c_str(), &lw, &lh, &lc, 3);
     if (lcpx && lw == near_.w && lh == near_.h) {
@@ -553,14 +573,33 @@ float TrackData::barrierAt(float s, int side) const {
 float TrackData::racingLineAt(float s) const { return interpScalar(s, &TrackSample::racingLine); }
 float TrackData::speedHintAt(float s) const { return interpScalar(s, &TrackSample::speedHint); }
 
+float TrackData::RoadSurface::at(int r, int c) const {
+    r = ((r % rows) + rows) % rows;
+    c = std::clamp(c, 0, cols - 1);
+    return rel[static_cast<size_t>(r) * cols + c];
+}
+
 float TrackData::roadHeight(float s, float lateral) const {
-    return centreAt(s).y - std::tan(bankAt(s)) * lateral;
+    if (surface_.rows == 0) return centreAt(s).y - std::tan(bankAt(s)) * lateral;
+    // bicubic (Catmull-Rom) through the scan: C1-continuous, so tyre contact normals are smooth
+    const float fr = wrapS(s) / surface_.ds;
+    const float fc = std::clamp((lateral - surface_.lat0) / surface_.dl, 0.0f, static_cast<float>(surface_.cols - 1));
+    const int r = static_cast<int>(std::floor(fr)), c = std::min(static_cast<int>(fc), surface_.cols - 2);
+    const float tr = fr - r, tc = fc - c;
+    auto cr = [](float p0, float p1, float p2, float p3, float t) {
+        return p1 + 0.5f * t * (p2 - p0 + t * (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3 + t * (3.0f * (p1 - p2) + p3 - p0)));
+    };
+    float colv[4];
+    for (int k = 0; k < 4; ++k) {
+        const int rr = r - 1 + k;
+        colv[k] = cr(surface_.at(rr, c - 1), surface_.at(rr, c), surface_.at(rr, c + 1), surface_.at(rr, c + 2), tc);
+    }
+    return centreAt(s).y + cr(colv[0], colv[1], colv[2], colv[3], tr);
 }
 
 glm::vec3 TrackData::surfacePoint(float s, float lateral) const {
-    glm::vec3 c = centreAt(s);
-    glm::vec3 p = c + rightAt(s) * lateral;
-    p.y = c.y - std::tan(bankAt(s)) * lateral;
+    glm::vec3 p = centreAt(s) + rightAt(s) * lateral;
+    p.y = roadHeight(s, lateral);
     return p;
 }
 
